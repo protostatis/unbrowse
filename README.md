@@ -80,45 +80,58 @@ for s in call("query", selector=".titleline > a")[:3]:
 
 13 lines, no dependencies, no headless browser install. The output is structured JSON, not 35KB of HTML.
 
-## When to use
+## SPA tier — what works, what doesn't
+
+Empirical, not aspirational. Latest matrix: **28/30** on tested categories.
+
+| Page tier | Coverage | What to expect |
+|---|---|---|
+| **Static + SSR** (Wikipedia, MDN, news, docs, GitHub repo browsing, search engines, archive.org) | ✅ excellent | sub-second navigate; full BlockMap; all selectors work; ~hundreds of tokens vs ~tens of KB raw |
+| **SSR + light hydration** (Next.js docs, marketing pages, react.dev's *static* content) | ✅ usable | reads SSR'd content fine; hydration adds nothing but doesn't break either |
+| **Bot-walled with cookie handoff** (Zillow, Cloudflare-protected sites) | ✅ via `cookies_set` | solve once in Chrome, replay forever; `challenge.provider` field tells the agent which vendor |
+| **Module-loader SPAs** (Ember, AMD apps like crates.io) | ⚠️ partial with `exec_scripts: true` | bundles fetch + execute, modules register, but framework auto-mount needs case-by-case shimming |
+| **Heavy React/Vue bundles** (react.dev runtime, large dashboard apps) | ⚠️ bounded — won't hang, won't render | with `exec_scripts: true` the navigate completes inside the 5s eval budget; rendered DOM may not materialize |
+| **Apps requiring Workers / Canvas / IndexedDB / WebGL** | ❌ out of scope by design | use the cookie-handoff path with real Chrome via [unchainedsky.com](https://unchainedsky.com) |
+| **Hardest-tier anti-bot** (PerimeterX with behavioral, Kasada, Akamai BMP advanced) | ❌ even cookie handoff is fragile | managed service is the right tier |
+
+**Vs the alternatives:**
 
 | | This | curl | Playwright / headless Chrome |
 |---|---|---|---|
 | Static / SSR pages | ✅ | ✅ but token-heavy | overkill |
+| SPA-shell sites | ⚠️ partial via `exec_scripts` | ❌ | ✅ |
 | Bot-walled (with cookie handoff) | ✅ | ❌ | ✅ |
-| SPA whose data is JS-rendered | ❌ until Phase 4/5 | ❌ | ✅ |
 | Run in Lambda / Workers / edge | ✅ | ✅ | ❌ Chrome too big |
 | Per-page cost at 100K/day | ~free | ~free | $$$ |
 | LLM-shaped output | ✅ BlockMap inline | DIY parse | DIY parse |
 
-If most of your pages are static or SSR, this. If most are SPAs, Playwright. If you don't want to run anything, see [unchainedsky.com](https://unchainedsky.com).
-
 ## Verified against (working)
 
-Concrete sites where this binary was tested and produced clean structured output. Times measured cold-start to extracted-result.
+Concrete sites tested with measured times. Cold-start to extracted-result.
 
 | Category | Sites | Time |
 |---|---|---|
-| Reference / docs | Wikipedia, MDN, docs.rs, PyPI | 0.9 – 5.8s |
+| Reference / docs | Wikipedia, MDN, docs.rs, PyPI, react.dev (SSR portion) | 0.9 – 5.8s |
 | News | Hacker News, BBC, TechCrunch, ArXiv listings | 1 – 1.6s |
 | Search | Google `/search`, Bing, Brave, DuckDuckGo (html) | 0.2 – 1.8s |
 | Dev | GitHub repo pages, npm, StackOverflow, HuggingFace model cards | 0.7 – 2.4s |
-| Crypto / finance | CoinGecko | 3.5s |
+| Crypto / finance | CoinGecko, Yahoo Finance (post-redirect-fix) | 3.5 – 6.9s |
 | Social | Lobsters, old.reddit.com | 0.9 – 1.4s |
 | Govt / institutional | arXiv, archive.org, gov.uk | 0.6 – 1.0s |
-| Interaction primitives | type, click + auto-follow, cookies_set/get/replay, eval | 0.3 – 1.3s |
+| Interaction primitives | type, click + auto-follow, cookies_set/get/replay, eval, query_text | 0.3 – 1.3s |
 
-**Surprises:** all four major search engines work — Google `/search` returns 200 + 91KB without challenge. CoinGecko's heavy dashboard SSRs enough that quotes come through. HuggingFace model cards expose model name in `<h1>`.
+**Surprises:** all four major search engines work cleanly. CoinGecko's heavy dashboard SSRs enough that quotes come through. HuggingFace model cards expose model name in `<h1>`.
 
-## Doesn't work today
+## Bot-detection diagnostics
 
-| Category | Sites | Why |
-|---|---|---|
-| SPA shells | crates.io, GitHub issues/PRs list, eBay search, modern reddit.com, DDG main domain | content rendered by JS — needs Phase 4/5 |
-| Bot-walled e-commerce | Amazon (AWS WAF), Yahoo Finance (sad-panda) | use cookie handoff via [unchainedsky.com](https://unchainedsky.com) or local Chrome |
-| Hardest anti-bot tier | PerimeterX with behavioral telemetry, Akamai BMP advanced, Kasada | even cookie handoff is fragile — managed service is the right tier |
+Every blocked navigate returns a `challenge` field naming the vendor (`perimeterx_block`, `cloudflare_turnstile`, `aws_waf`, `datadome`, `akamai_bmp`, `imperva`, `arkose_labs`, `recaptcha`, `press_hold`, `yahoo_sad_panda`, `interstitial`, `generic_human_verification`, `unknown_block`) plus the expected clearance cookie name. Agents react with cookie handoff via `cookies_set` instead of guessing.
 
-The binary surfaces both kinds of failures explicitly — `density.thin_shell` / `density.likely_js_filled` for SPA detection, `challenge.provider` for bot walls — so agents can decide whether to escalate or skip.
+## SPA-detection diagnostics
+
+Every navigate's `blockmap.density` field signals SPA-ness so agents bail before wasting round-trips:
+- `thin_shell: true` — page is < 4KB body text with no headings or interactives (typical React/Ember root)
+- `likely_js_filled: true` — `<table>` shells exist but are empty (CNBC-class trap)
+- `json_scripts: N` — count of `<script type="application/json">` (often holds the data the JS would render — try `eval()` on those before escalating)
 
 ## Three ways agents talk to it
 

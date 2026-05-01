@@ -512,6 +512,131 @@
     this.abort = function() { this.signal.aborted = true; };
   };
 
+  // ---- XMLHttpRequest — wraps fetch() ------------------------------------
+  // Older jQuery, GA legacy, many polyfilled libs use XHR. Implementing it
+  // on top of fetch keeps cookies + TLS coherence and avoids a second
+  // host-binding layer.
+  globalThis.XMLHttpRequest = function() {
+    var self = this;
+    this.readyState = 0;
+    this.status = 0;
+    this.statusText = '';
+    this.responseText = '';
+    this.response = '';
+    this.responseURL = '';
+    this.responseType = '';
+    this.timeout = 0;
+    this.withCredentials = false;
+    this.onreadystatechange = null;
+    this.onload = null;
+    this.onerror = null;
+    this.onabort = null;
+    this.onloadstart = null;
+    this.onloadend = null;
+    this.onprogress = null;
+    this.ontimeout = null;
+    self._method = 'GET';
+    self._url = '';
+    self._async = true;
+    self._headers = {};
+    self._respHeaders = {};
+    self._aborted = false;
+    self._listeners = {};
+
+    function fire(type) {
+      var handler = self['on' + type];
+      if (typeof handler === 'function') { try { handler.call(self); } catch (e) {} }
+      var list = self._listeners[type] || [];
+      for (var i = 0; i < list.length; i++) { try { list[i].call(self); } catch (e) {} }
+    }
+
+    this.open = function(method, url, async) {
+      self._method = String(method || 'GET').toUpperCase();
+      self._url = String(url || '');
+      self._async = (async !== false);
+      self.readyState = 1;
+      fire('readystatechange');
+    };
+    this.setRequestHeader = function(k, v) { self._headers[String(k)] = String(v); };
+    this.getResponseHeader = function(k) {
+      var key = String(k || '').toLowerCase();
+      return self._respHeaders[key] || null;
+    };
+    this.getAllResponseHeaders = function() {
+      var out = '';
+      for (var k in self._respHeaders) out += k + ': ' + self._respHeaders[k] + '\r\n';
+      return out;
+    };
+    this.overrideMimeType = function() {};
+    this.send = function(body) {
+      self.readyState = 2;
+      fire('readystatechange');
+      fire('loadstart');
+      var init = { method: self._method, headers: self._headers };
+      if (body !== undefined && body !== null && self._method !== 'GET' && self._method !== 'HEAD') {
+        init.body = body;
+      }
+      fetch(self._url, init).then(function(resp) {
+        if (self._aborted) return;
+        self.status = resp.status;
+        self.statusText = resp.statusText || '';
+        self.responseURL = resp.url || self._url;
+        self._respHeaders = {};
+        if (resp.headers && resp.headers.forEach) {
+          resp.headers.forEach(function(v, k) { self._respHeaders[String(k).toLowerCase()] = v; });
+        }
+        self.readyState = 3;
+        fire('readystatechange');
+        return resp.text();
+      }).then(function(text) {
+        if (self._aborted) return;
+        self.responseText = text || '';
+        if (self.responseType === 'json') {
+          try { self.response = JSON.parse(self.responseText); } catch (e) { self.response = null; }
+        } else {
+          self.response = self.responseText;
+        }
+        self.readyState = 4;
+        fire('readystatechange');
+        fire('load');
+        fire('loadend');
+      }).catch(function(err) {
+        if (self._aborted) return;
+        self.readyState = 4;
+        fire('readystatechange');
+        fire('error');
+        fire('loadend');
+      });
+    };
+    this.abort = function() {
+      self._aborted = true;
+      self.readyState = 4;
+      fire('readystatechange');
+      fire('abort');
+      fire('loadend');
+    };
+    this.addEventListener = function(type, fn) {
+      if (!self._listeners[type]) self._listeners[type] = [];
+      self._listeners[type].push(fn);
+    };
+    this.removeEventListener = function(type, fn) {
+      if (!self._listeners[type]) return;
+      self._listeners[type] = self._listeners[type].filter(function(f) { return f !== fn; });
+    };
+    this.dispatchEvent = function() { return true; };
+  };
+  globalThis.XMLHttpRequest.UNSENT = 0;
+  globalThis.XMLHttpRequest.OPENED = 1;
+  globalThis.XMLHttpRequest.HEADERS_RECEIVED = 2;
+  globalThis.XMLHttpRequest.LOADING = 3;
+  globalThis.XMLHttpRequest.DONE = 4;
+
+  // ---- Analytics / tracking globals (stub so pages don't crash) ---------
+  globalThis.ga = globalThis.ga || function() {};
+  globalThis.gtag = globalThis.gtag || function() {};
+  globalThis._gaq = globalThis._gaq || { push: function() {} };
+  globalThis.dataLayer = globalThis.dataLayer || [];
+
   // Mark shims as installed so callers can feature-detect.
   globalThis.__shims_installed = true;
 
