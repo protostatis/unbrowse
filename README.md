@@ -159,6 +159,14 @@ with Router(RouterConfig(
     r.navigate("https://www.zillow.com/homes/for_rent/")  # auto-handles 403 + cookie replay
 ```
 
+### Live event watcher (`scripts/watch.py`)
+
+The binary emits NDJSON events (`ready`, `navigate`, `challenge`) on stderr. Pipe them through `watch.py` for color-coded one-liners:
+
+```bash
+unbrowse 2> >(python3 scripts/watch.py)
+```
+
 ## RPC methods
 
 | | |
