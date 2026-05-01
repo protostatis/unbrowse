@@ -1,0 +1,158 @@
+# Builds release binaries for all supported platforms and attaches them
+# to a GitHub Release. Triggered by pushing a tag matching `v*`, e.g.:
+#
+#   git tag v0.0.1 && git push origin v0.0.1
+#
+# Or via the workflow_dispatch button in the Actions UI.
+
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v0.0.1) — must already exist as a git tag"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-14         # Apple Silicon runner
+          - target: x86_64-apple-darwin
+            os: macos-13         # Intel Mac runner
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo + target
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      # rquest pulls in boring-sys2 (BoringSSL) which needs cmake + ninja.
+      - name: Install build deps (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install cmake ninja
+          # Apple's bundled clang already supports cross-compilation between
+          # arm64 and x64; cargo --target handles the rest.
+
+      - name: Install build deps (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Smoke test (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          # Verify the binary at least starts and accepts a `close` command.
+          # Native runs only — skip when host arch != target arch.
+          if [ "${{ matrix.target }}" = "x86_64-apple-darwin" ] && [ "$(uname -m)" = "arm64" ]; then
+            echo "skip: cross-compiled binary, host can't run it"
+            exit 0
+          fi
+          if [ "${{ matrix.target }}" = "aarch64-apple-darwin" ] && [ "$(uname -m)" = "x86_64" ]; then
+            echo "skip: cross-compiled binary, host can't run it"
+            exit 0
+          fi
+          echo '{"id":1,"method":"close"}' | ./target/${{ matrix.target }}/release/unbrowse > /tmp/out
+          cat /tmp/out
+          grep -q '"result":"bye"' /tmp/out
+
+      - name: Package archive
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar -czf ../../../unbrowse-${{ matrix.target }}.tar.gz unbrowse
+
+      - name: Compute checksum
+        run: |
+          shasum -a 256 unbrowse-${{ matrix.target }}.tar.gz > unbrowse-${{ matrix.target }}.tar.gz.sha256
+          cat unbrowse-${{ matrix.target }}.tar.gz.sha256
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: unbrowse-${{ matrix.target }}
+          path: |
+            unbrowse-${{ matrix.target }}.tar.gz
+            unbrowse-${{ matrix.target }}.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history so generate_release_notes works
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: unbrowse-*
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -la
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          files: |
+            unbrowse-*.tar.gz
+            unbrowse-*.tar.gz.sha256
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          body: |
+            ## Install
+
+            Pick your platform and download:
+
+            | Platform | Asset |
+            |---|---|
+            | macOS Apple Silicon | `unbrowse-aarch64-apple-darwin.tar.gz` |
+            | macOS Intel | `unbrowse-x86_64-apple-darwin.tar.gz` |
+            | Linux x86_64 (glibc) | `unbrowse-x86_64-unknown-linux-gnu.tar.gz` |
+
+            ### One-liner (macOS / Linux):
+
+            ```bash
+            curl -L https://github.com/protostatis/unbrowse/releases/download/${{ github.ref_name }}/unbrowse-$(uname -m | sed 's/arm64/aarch64/')-$(uname -s | tr A-Z a-z | sed 's/darwin/apple-darwin/;s/linux/unknown-linux-gnu/').tar.gz \
+              | tar xz -C /usr/local/bin
+            unbrowse --mcp
+            ```
+
+            ### Verify checksums:
+
+            ```bash
+            shasum -a 256 -c unbrowse-*.tar.gz.sha256
+            ```
+
+            ## What's new
+
+            See auto-generated changelog below.
