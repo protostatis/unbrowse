@@ -18,6 +18,7 @@ chrome_solver callback.
 
 from __future__ import annotations
 
+import atexit
 import json
 import os
 import subprocess
@@ -51,6 +52,13 @@ class Client:
             bufsize=1,
         )
         self._next_id = 0
+        self._closed = False
+        # Belt-and-braces orphan prevention: if the interpreter exits before
+        # __exit__ runs (e.g. an unhandled exception inside the `with`, or a
+        # heredoc-wrapped invocation killed mid-flight), atexit reaps the
+        # subprocess. Closing our stdin gives the binary's reader an EOF so
+        # it self-terminates without needing the close RPC.
+        atexit.register(self._reap)
 
     # ---- core RPC --------------------------------------------------------
 
@@ -135,14 +143,43 @@ class Client:
         return self.call("cookies_clear")
 
     def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
         try:
             self.call("close")
-        except UnbrowseError:
+        except (UnbrowseError, BrokenPipeError, OSError):
+            pass
+        self._reap()
+
+    def _reap(self) -> None:
+        # Idempotent: stdin EOF first (binary's reader returns None and the
+        # RPC loop exits cleanly), then escalate via terminate → kill if it
+        # doesn't respond. Always wait() at the end so we don't leave a
+        # zombie. Called from both close() and atexit.
+        if self._proc.poll() is not None:
+            return
+        try:
+            if self._proc.stdin and not self._proc.stdin.closed:
+                self._proc.stdin.close()
+        except (BrokenPipeError, OSError):
             pass
         try:
             self._proc.wait(timeout=2)
+            return
         except subprocess.TimeoutExpired:
-            self._proc.kill()
+            pass
+        self._proc.terminate()
+        try:
+            self._proc.wait(timeout=2)
+            return
+        except subprocess.TimeoutExpired:
+            pass
+        self._proc.kill()
+        try:
+            self._proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            pass
 
     # ---- context manager -------------------------------------------------
 
