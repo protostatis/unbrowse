@@ -84,6 +84,18 @@ class Client:
         """textContent of the main content area (excludes header/nav/footer/aside)."""
         return self.call("text_main")
 
+    def query_text(self, text: str, selector: str | None = None,
+                   exact: bool = False, limit: int = 20) -> list[dict]:
+        """Find elements by visible text content (chrome-stripped, deepest match).
+
+        Use when CSS selectors are unstable (React-rendered pages) but the
+        visible label is reliable, e.g. r.query_text('Sign in')[0].
+        """
+        params: dict = {"text": text, "exact": exact, "limit": limit}
+        if selector is not None:
+            params["selector"] = selector
+        return self.call("query_text", **params)
+
     def click(self, ref: str) -> dict:
         return self.call("click", ref=ref)
 

@@ -343,6 +343,94 @@ impl Session {
         self.eval(&code)
     }
 
+    // Find elements by visible text content, skipping chrome (header/nav/
+    // footer/aside/script/style). Returns the smallest/deepest element
+    // whose textContent matches the needle. Anchor-promotion: if the deepest
+    // match is a <span>/<strong>/etc. whose direct parent is <a>, the anchor
+    // is returned instead (so click() targets the actionable element).
+    //
+    // Right tool for sites where CSS selectors are unstable (React-rendered
+    // pages with hashed class names) but the visible text is reliable.
+    fn query_text(
+        &self,
+        text: &str,
+        selector: Option<&str>,
+        exact: bool,
+        limit: u32,
+    ) -> Result<Value> {
+        let text_lit = serde_json::to_string(text)?;
+        let sel_lit = match selector {
+            Some(s) => serde_json::to_string(s)?,
+            None => "null".to_string(),
+        };
+        let code = format!(
+            r#"(function(){{
+                var needle = {text_lit};
+                var sel = {sel_lit};
+                var exact = {exact};
+                var limit = {limit};
+                var lowerNeedle = needle.toLowerCase();
+                function clean(s) {{ return (s || '').replace(/\s+/g, ' ').trim(); }}
+                function isChromeTag(t) {{
+                    return t === 'header' || t === 'nav' || t === 'footer' ||
+                           t === 'aside' || t === 'script' || t === 'style' ||
+                           t === 'noscript';
+                }}
+                // Pre-filter (descent gate): always substring — we need to
+                // recurse if any descendant might match, regardless of mode.
+                function contains(t) {{
+                    return clean(t).toLowerCase().indexOf(lowerNeedle) !== -1;
+                }}
+                // Final match test (decides whether to push this node):
+                // exact requires equality, otherwise substring is enough.
+                function isMatch(t) {{
+                    var c = clean(t);
+                    return exact ? (c === needle) : (c.toLowerCase().indexOf(lowerNeedle) !== -1);
+                }}
+                var hits = [];
+                function visit(node) {{
+                    if (hits.length >= limit) return;
+                    if (!node || node.nodeType !== 1) return;
+                    var tag = node.tagName.toLowerCase();
+                    if (isChromeTag(tag)) return;
+                    var text = node.textContent || '';
+                    if (!contains(text)) return;
+                    var beforeCount = hits.length;
+                    for (var i = 0; i < node.childNodes.length; i++) {{
+                        visit(node.childNodes[i]);
+                        if (hits.length >= limit) return;
+                    }}
+                    if (hits.length === beforeCount && isMatch(text)) {{
+                        var target = node;
+                        if (node.parentNode && node.parentNode.tagName === 'A' &&
+                            ['SPAN','STRONG','EM','B','I','SMALL','MARK'].indexOf(node.tagName) !== -1) {{
+                            target = node.parentNode;
+                        }}
+                        hits.push(target);
+                    }}
+                }}
+                var roots;
+                if (sel) {{
+                    var nodeList = document.querySelectorAll(sel);
+                    roots = [];
+                    for (var i = 0; i < nodeList.length; i++) roots.push(nodeList[i]);
+                }} else {{
+                    roots = [document.body];
+                }}
+                for (var i = 0; i < roots.length; i++) visit(roots[i]);
+                return hits.map(function(el) {{
+                    return {{
+                        ref: 'e:' + el._id,
+                        tag: el.tagName.toLowerCase(),
+                        attrs: el._attributes,
+                        text: clean(el.textContent).slice(0, 200),
+                    }};
+                }});
+            }})()"#
+        );
+        self.eval(&code)
+    }
+
     // Returns the textContent of the page's main content area, excluding chrome
     // (header, nav, footer, aside, script, style) — recursively, so even
     // chrome nested INSIDE <main> (e.g. Wikipedia's table-of-contents <nav>)
@@ -849,6 +937,27 @@ async fn rpc_main() -> Result<()> {
                 Ok(v) => ok_response(id, v),
                 Err(e) => err_response(id, -5, e.to_string()),
             },
+            "query_text" => {
+                let text = req.params.get("text").and_then(|v| v.as_str());
+                let selector = req.params.get("selector").and_then(|v| v.as_str());
+                let exact = req
+                    .params
+                    .get("exact")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let limit = req
+                    .params
+                    .get("limit")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(20) as u32;
+                match text {
+                    Some(t) => match session.query_text(t, selector, exact, limit) {
+                        Ok(v) => ok_response(id, v),
+                        Err(e) => err_response(id, -5, e.to_string()),
+                    },
+                    None => err_response(id, -32602, "missing 'text' param"),
+                }
+            }
             "blockmap" => match session.blockmap() {
                 Ok(v) => ok_response(id, v),
                 Err(e) => err_response(id, -6, e.to_string()),
@@ -951,6 +1060,20 @@ fn mcp_tools() -> Value {
             "inputSchema": { "type": "object", "properties": {} }
         },
         {
+            "name": "query_text",
+            "description": "Find elements by visible text content. Returns the smallest/deepest element whose textContent matches the needle, with chrome (header/nav/footer/aside) skipped. Anchor-promotion: a span/strong/etc. inside an <a> resolves to the anchor (so click() targets the actionable element). Right tool when CSS selectors are unstable (React-rendered pages with hashed class names) but the visible label is reliable — e.g. find a 'Sign in' button without knowing its class.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "text":     { "type": "string", "description": "Substring to match (or exact string if exact=true)" },
+                    "selector": { "type": "string", "description": "Optional CSS selector to limit search scope (default: whole document body)" },
+                    "exact":    { "type": "boolean", "description": "If true, exact match instead of substring (default false)" },
+                    "limit":    { "type": "integer", "description": "Max matches to return (default 20)" }
+                },
+                "required": ["text"]
+            }
+        },
+        {
             "name": "blockmap",
             "description": "Recompute the BlockMap for the current page. Use after eval'd JS or click/type modifies the DOM. Same shape as the inline blockmap from navigate.",
             "inputSchema": { "type": "object", "properties": {} }
@@ -1040,6 +1163,13 @@ async fn dispatch_tool(session: &mut Session, name: &str, args: &Value) -> Resul
             session.text(sel)
         }
         "text_main" => session.text_main(),
+        "query_text" => {
+            let text = str_arg("text").ok_or_else(|| anyhow!("missing 'text'"))?;
+            let selector = str_arg("selector");
+            let exact = args.get("exact").and_then(|v| v.as_bool()).unwrap_or(false);
+            let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(20) as u32;
+            session.query_text(text, selector, exact, limit)
+        }
         "blockmap" => session.blockmap(),
         "click" => {
             let r = str_arg("ref").ok_or_else(|| anyhow!("missing 'ref'"))?;
