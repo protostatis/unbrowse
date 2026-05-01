@@ -25,6 +25,7 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote_plus, urljoin, urlparse
 
 __version__ = "0.0.1"
 
@@ -104,6 +105,10 @@ class Client:
         )
         self._next_id = 0
         self._closed = False
+        # Track the last successful navigate URL Python-side so make_absolute_url
+        # can resolve relative hrefs without round-tripping to the binary. Updated
+        # after every successful navigate / submit / click-with-follow.
+        self._last_url: str | None = None
         # Belt-and-braces orphan prevention: if the interpreter exits before
         # __exit__ runs (unhandled exception, sys.exit, heredoc-wrapped
         # invocation killed mid-flight), atexit reaps the subprocess. The
@@ -131,7 +136,10 @@ class Client:
     # ---- typed wrappers (don't add behavior; just discoverability) -------
 
     def navigate(self, url: str, exec_scripts: bool = False) -> dict:
-        return self.call("navigate", url=url, exec_scripts=exec_scripts)
+        r = self.call("navigate", url=url, exec_scripts=exec_scripts)
+        if isinstance(r, dict) and r.get("url"):
+            self._last_url = r["url"]
+        return r
 
     def query(self, selector: str) -> list[dict]:
         return self.call("query", selector=selector)
@@ -156,13 +164,67 @@ class Client:
         return self.call("query_text", **params)
 
     def click(self, ref: str) -> dict:
-        return self.call("click", ref=ref)
+        r = self.call("click", ref=ref)
+        # click on <a href> auto-follows and returns navigate-shape result;
+        # update last_url so make_absolute_url stays accurate.
+        if isinstance(r, dict) and r.get("url"):
+            self._last_url = r["url"]
+        return r
 
     def type(self, ref: str, text: str) -> dict:
         return self.call("type", ref=ref, text=text)
 
     def submit(self, ref: str) -> dict:
-        return self.call("submit", ref=ref)
+        r = self.call("submit", ref=ref)
+        if isinstance(r, dict) and r.get("url"):
+            self._last_url = r["url"]
+        return r
+
+    def search(self, query: str, engine: str = "ddg") -> dict:
+        """Search via the named engine; return the navigate result.
+
+        Engines:
+            ddg   — DuckDuckGo HTML (default; reliable, returns SSR'd results
+                    that the cheap path can extract directly via query()).
+            bing  — Bing search (also works without exec_scripts).
+
+        Google is intentionally NOT supported via the cheap path — Google's
+        search page returns ~no useful HTML without JS, so it would silently
+        fail. Use the cookie-handoff escalation path or one of the supported
+        engines instead.
+
+        Use after navigate(), or as the first call: it kicks off its own
+        navigate. The returned dict is the same shape as Client.navigate.
+        """
+        if engine == "ddg":
+            url = "https://duckduckgo.com/html/?q=" + quote_plus(query)
+        elif engine == "bing":
+            url = "https://www.bing.com/search?q=" + quote_plus(query)
+        else:
+            raise UnbrowseError(
+                f"unknown search engine '{engine}'. Supported: ddg, bing. "
+                "Google is intentionally unsupported via the cheap path."
+            )
+        return self.navigate(url)
+
+    def make_absolute_url(self, href: str) -> str:
+        """Resolve a relative href against the current page URL.
+
+        Use after navigate to expand `<a href="/foo">` or `href="../bar"`
+        into a full URL. If `href` is already absolute (has scheme + host),
+        it's returned unchanged — preventing the double-prefix class of bug
+        you get from naive ``current_url + href`` concatenation.
+
+        Raises UnbrowseError if no page has been navigated yet.
+        """
+        if not href:
+            raise UnbrowseError("empty href")
+        parsed = urlparse(href)
+        if parsed.scheme and parsed.netloc:
+            return href
+        if not self._last_url:
+            raise UnbrowseError("no current page — call navigate first")
+        return urljoin(self._last_url, href)
 
     def blockmap(self) -> dict:
         return self.call("blockmap")
@@ -192,6 +254,18 @@ class Client:
         return self.call("body")
 
     def eval(self, code: str) -> Any:
+        """Run arbitrary JS in the session.
+
+        Returns the JS expression's result already JSON-decoded into a Python
+        value (dict / list / str / int / float / bool / None). DO NOT call
+        json.loads() on the return value — the wrapper already did. The Rust
+        side runs JSON.stringify on the JS value, the JSON-RPC framing parses
+        it once, and the result is the Python equivalent.
+
+        Errors surface the real JS exception name + message
+        (`TypeError: cannot read property 'foo' of null` etc.) so iteration
+        is fast.
+        """
         return self.call("eval", code=code)
 
     def cookies_set(self, cookies: list[dict], url: str | None = None) -> dict:
