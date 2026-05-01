@@ -249,6 +249,25 @@ impl Session {
         let resp = self.http.get(url).send().await.context("http get")?;
         let status = resp.status().as_u16();
         let final_url = resp.url().to_string();
+
+        // Snapshot useful response headers before consuming the response body.
+        // Multi-value headers (Set-Cookie) are joined with ' || ' since they're
+        // mostly diagnostic — the actual cookie storage already happened in
+        // rquest's CookieStore impl.
+        let mut headers: serde_json::Map<String, Value> = serde_json::Map::new();
+        for (name, value) in resp.headers() {
+            let key = name.as_str().to_lowercase();
+            let v = value.to_str().unwrap_or("").to_string();
+            match headers.get_mut(&key) {
+                Some(Value::String(existing)) => {
+                    *existing = format!("{existing} || {v}");
+                }
+                _ => {
+                    headers.insert(key, Value::String(v));
+                }
+            }
+        }
+
         let body = resp.text().await.context("read body")?;
         let bytes = body.len();
 
@@ -266,6 +285,7 @@ impl Session {
             "status": status,
             "url": final_url,
             "bytes": bytes,
+            "headers": Value::Object(headers),
             "blockmap": blockmap,
             "challenge": challenge,
         }))
@@ -314,6 +334,53 @@ impl Session {
             }})()"
         );
         self.eval(&code)
+    }
+
+    // Returns the textContent of the page's main content area, excluding chrome
+    // (header, nav, footer, aside, script, style) — recursively, so even
+    // chrome nested INSIDE <main> (e.g. Wikipedia's table-of-contents <nav>)
+    // is skipped.
+    //
+    // Strategy:
+    //  1. <main> or [role=main] if present (walk inside, skip chrome)
+    //  2. exactly one <article>
+    //  3. fallback: the whole body with chrome subtrees stripped
+    fn text_main(&self) -> Result<Value> {
+        let code = r#"(function(){
+            function clean(s){ return (s || '').replace(/\s+/g, ' ').trim(); }
+            // Walk subtree, concatenate text, skipping chrome tags.
+            function nonChromeText(root){
+                var out = [];
+                (function walk(node){
+                    if (!node) return;
+                    if (node.nodeType === 3) {
+                        out.push(node.textContent);
+                        return;
+                    }
+                    if (node.nodeType !== 1) return;
+                    var t = (node.tagName || '').toLowerCase();
+                    if (t === 'script' || t === 'style' ||
+                        t === 'header' || t === 'nav' ||
+                        t === 'footer' || t === 'aside' ||
+                        t === 'noscript') return;
+                    for (var i = 0; i < node.childNodes.length; i++) walk(node.childNodes[i]);
+                })(root);
+                return clean(out.join(' '));
+            }
+
+            var main = document.querySelector('main, [role="main"]');
+            if (main) {
+                var t = nonChromeText(main);
+                if (t.length > 0) return t;
+            }
+            var articles = document.querySelectorAll('article');
+            if (articles.length === 1) {
+                var t = nonChromeText(articles[0]);
+                if (t.length > 0) return t;
+            }
+            return nonChromeText(document.body);
+        })()"#;
+        self.eval(code)
     }
 
     async fn click(&mut self, ref_: &str) -> Result<Value> {
@@ -658,6 +725,10 @@ async fn rpc_main() -> Result<()> {
                     Err(e) => err_response(id, -5, e.to_string()),
                 }
             }
+            "text_main" => match session.text_main() {
+                Ok(v) => ok_response(id, v),
+                Err(e) => err_response(id, -5, e.to_string()),
+            },
             "blockmap" => match session.blockmap() {
                 Ok(v) => ok_response(id, v),
                 Err(e) => err_response(id, -6, e.to_string()),
@@ -748,11 +819,16 @@ fn mcp_tools() -> Value {
         },
         {
             "name": "text",
-            "description": "Get the textContent of the first element matching the selector (default: body). Use this when you need the visible text of a region rather than its structure.",
+            "description": "Get the textContent of the FIRST element matching the selector (default: body). Note: on Wikipedia/MDN/news sites, the first <p> is often a hatnote or image caption, not the lead paragraph — prefer `text_main` for reading the page's primary content.",
             "inputSchema": {
                 "type": "object",
                 "properties": { "selector": { "type": "string", "description": "CSS selector (default: body)" } }
             }
+        },
+        {
+            "name": "text_main",
+            "description": "Get the textContent of the page's main content area, excluding chrome (header/nav/footer/aside). Tries <main>, then [role=main], then a single <article>, then falls back to the longest non-chrome subtree. Use this for reading article body / docs page / blog post content.",
+            "inputSchema": { "type": "object", "properties": {} }
         },
         {
             "name": "blockmap",
@@ -843,6 +919,7 @@ async fn dispatch_tool(session: &mut Session, name: &str, args: &Value) -> Resul
             let sel = str_arg("selector").unwrap_or("body");
             session.text(sel)
         }
+        "text_main" => session.text_main(),
         "blockmap" => session.blockmap(),
         "click" => {
             let r = str_arg("ref").ok_or_else(|| anyhow!("missing 'ref'"))?;

@@ -65,15 +65,31 @@
       };
     }
 
-    // Headings — keep up to 20.
+    // Headings — keep up to 20. Also surface a `main_headings` list that
+    // excludes anything inside <header>/<nav>/<footer>/<aside>, because on
+    // sites like GitHub the global headings list is dominated by site chrome
+    // ("Navigation Menu", "Search code...", etc.) instead of the actual
+    // page topic.
+    function inChromeAncestor(el) {
+      var n = el.parentNode;
+      while (n && n.tagName) {
+        var t = n.tagName.toLowerCase();
+        if (t === 'header' || t === 'nav' || t === 'footer' || t === 'aside') return true;
+        n = n.parentNode;
+      }
+      return false;
+    }
     var headings = [];
+    var mainHeadings = [];
     var hs = body.querySelectorAll('h1, h2, h3, h4, h5, h6');
     for (var i = 0; i < hs.length && i < 20; i++) {
-      headings.push({
+      var entry = {
         level: parseInt(hs[i].tagName[1], 10),
         text: clean(hs[i].textContent).slice(0, 80),
         ref: 'e:' + hs[i]._id,
-      });
+      };
+      headings.push(entry);
+      if (!inChromeAncestor(hs[i])) mainHeadings.push(entry);
     }
 
     // Interactives
@@ -220,6 +236,7 @@
       title: document.title || '',
       structure: structure,
       headings: headings,
+      main_headings: mainHeadings,
       interactives: {
         links: links.length,
         buttons: buttons.length,

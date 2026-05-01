@@ -80,6 +80,10 @@ class Client:
     def text(self, selector: str = "body") -> str | None:
         return self.call("text", selector=selector)
 
+    def text_main(self) -> str | None:
+        """textContent of the main content area (excludes header/nav/footer/aside)."""
+        return self.call("text_main")
+
     def click(self, ref: str) -> dict:
         return self.call("click", ref=ref)
 
