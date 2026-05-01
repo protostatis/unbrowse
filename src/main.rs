@@ -16,6 +16,7 @@ const DOM_JS: &str = include_str!("js/dom.js");
 const SHIMS_JS: &str = include_str!("js/shims.js");
 const BLOCKMAP_JS: &str = include_str!("js/blockmap.js");
 const INTERACT_JS: &str = include_str!("js/interact.js");
+const EXTRACT_JS: &str = include_str!("js/extract.js");
 
 #[derive(Deserialize)]
 struct Request {
@@ -353,6 +354,8 @@ impl Session {
                 .map_err(|e| anyhow!("eval blockmap.js: {e}"))?;
             ctx.eval::<(), _>(INTERACT_JS)
                 .map_err(|e| anyhow!("eval interact.js: {e}"))?;
+            ctx.eval::<(), _>(EXTRACT_JS)
+                .map_err(|e| anyhow!("eval extract.js: {e}"))?;
 
             // __host_fetch_send(id, method, url, headers_json, body) — fire-and-forget.
             // headers_json is a JSON-encoded string from JS to avoid converting
@@ -689,6 +692,17 @@ impl Session {
 
     fn blockmap(&self) -> Result<Value> {
         self.eval("__blockmap()")
+    }
+
+    // Auto-strategy extraction. Tries JSON-LD → __NEXT_DATA__ → Nuxt →
+    // OpenGraph/meta → microdata → text_main fallback, returns the
+    // highest-confidence hit. Pass strategy="json_ld" etc. to force one.
+    fn extract(&self, strategy: Option<&str>) -> Result<Value> {
+        let opts = match strategy {
+            Some(s) => format!("{{ strategy: {} }}", serde_json::to_string(s)?),
+            None => "{}".to_string(),
+        };
+        self.eval(&format!("__extract({opts})"))
     }
 
     // Drain the JS event loop: alternately runs queued microtasks (Promise
@@ -1579,6 +1593,13 @@ async fn rpc_main() -> Result<()> {
                 Ok(v) => ok_response(id, v),
                 Err(e) => err_response(id, -6, e.to_string()),
             },
+            "extract" => {
+                let strategy = req.params.get("strategy").and_then(|v| v.as_str());
+                match session.extract(strategy) {
+                    Ok(v) => ok_response(id, v),
+                    Err(e) => err_response(id, -6, e.to_string()),
+                }
+            }
             "settle" => {
                 let max_ms = req
                     .params
@@ -1716,6 +1737,16 @@ fn mcp_tools() -> Value {
             "inputSchema": { "type": "object", "properties": {} }
         },
         {
+            "name": "extract",
+            "description": "Auto-strategy structured-data extraction. Tries JSON-LD (schema.org) → __NEXT_DATA__ → Nuxt → OpenGraph/meta → microdata → text_main fallback, returns the highest-confidence hit as {strategy, confidence, data, tried}. Use this as the one-shot 'give me the data, you figure out how' call when you don't want to plan the strategy yourself. Pass strategy='json_ld' (or any of the names above) to force a specific extractor.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "strategy": { "type": "string", "description": "Optional: force a specific extractor (json_ld, next_data, nuxt_data, og_meta, microdata, text_main)" }
+                }
+            }
+        },
+        {
             "name": "settle",
             "description": "Drain the JS event loop: alternately runs queued microtasks (Promise resolutions) and fires expired setTimeout/setInterval callbacks, sleeping to the next deadline when only timers remain. Returns when the queue is empty OR max_ms elapses OR max_iters iterations complete. Defaults: max_ms=2000, max_iters=50. Use after seeding the DOM (or after eval'd code that schedules timers) to let pending callbacks run.",
             "inputSchema": {
@@ -1823,6 +1854,10 @@ async fn dispatch_tool(session: &mut Session, name: &str, args: &Value) -> Resul
             session.query_text(text, selector, exact, limit)
         }
         "blockmap" => session.blockmap(),
+        "extract" => {
+            let strategy = str_arg("strategy");
+            session.extract(strategy)
+        }
         "settle" => {
             let max_ms = args.get("max_ms").and_then(|v| v.as_u64()).unwrap_or(2000);
             let max_iters = args.get("max_iters").and_then(|v| v.as_u64()).unwrap_or(50) as u32;

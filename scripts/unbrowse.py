@@ -116,6 +116,18 @@ class Client:
     def blockmap(self) -> dict:
         return self.call("blockmap")
 
+    def extract(self, strategy: str | None = None) -> dict:
+        """Auto-strategy structured-data extraction.
+
+        Tries JSON-LD → __NEXT_DATA__ → Nuxt → OpenGraph/meta → microdata →
+        text_main fallback, returns the highest-confidence hit as
+        {strategy, confidence, data, tried}. Pass strategy='json_ld' (etc.)
+        to force a specific extractor.
+        """
+        if strategy is None:
+            return self.call("extract")
+        return self.call("extract", strategy=strategy)
+
     def settle(self, max_ms: int = 2000, max_iters: int = 50) -> dict:
         """Drain the JS event loop: microtasks + setTimeout/setInterval.
 
