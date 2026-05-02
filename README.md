@@ -4,13 +4,14 @@
 
 ### Install
 
-**Python (recommended)** — wheel ships the native binary, Python 3.10+:
+**Python (recommended)** — wheel ships the native binary. **Requires Python 3.10+**:
 
 ```bash
-pip install pyunbrowser
-# Or, on systems with a PEP-668-managed Python (Homebrew, modern Linux):
-pipx install pyunbrowser
+pipx install pyunbrowser   # cleanest on macOS Homebrew / modern Linux (handles PEP 668)
+pip  install pyunbrowser   # in a venv on python3.10+
 ```
+
+> **macOS gotcha**: the system `/usr/bin/python3` is 3.9 and the wheel will reject it with "requires Python >=3.10". Use Homebrew's `python3.13` or `pipx` (which manages its own Python). If `pip install` fails with PEP 668 ("externally-managed-environment"), that's the same issue — `pipx install pyunbrowser` is the right call.
 
 ```python
 from unbrowser import Client       # note: pip name is pyunbrowser, import is unbrowser
