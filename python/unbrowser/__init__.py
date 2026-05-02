@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote_plus, urljoin, urlparse
 
-__version__ = "0.0.4"
+__version__ = "0.0.5"
 
 __all__ = ["Client", "UnbrowserError", "find_binary", "navigate", "__version__"]
 
@@ -238,6 +238,43 @@ class Client:
 
     def blockmap(self) -> dict:
         return self.call("blockmap")
+
+    def extract_table(self, selector: str) -> dict | None:
+        """Pull a <table> into {headers, rows, row_count}.
+
+        Headers come from <thead><th>...</th></thead> if present, else from
+        the first <tr>'s <th> cells. Each subsequent <tr>'s <td> cells
+        become a row dict keyed by header (or 'col_N' if no header for that
+        column). Returns None if the selector matches nothing.
+
+        Right tool for pricing tables, specs tables, finance listings —
+        anything <table>-shaped. Saves writing the per-cell mapping eval.
+        """
+        return self.call("extract_table", selector=selector)
+
+    def extract_list(self, item_selector: str, fields: dict,
+                     limit: int = 1000) -> list[dict]:
+        """Pull a repeated card pattern into [{...}, {...}].
+
+        `item_selector` matches each card; `fields` maps field name -> spec.
+        Field spec shapes:
+            "css selector"            -> textContent of first match
+            "css selector @attr"      -> attribute value of first match
+            ("css selector", "@attr") -> same, tuple form
+
+        If a sub-selector returns null, the field value is null. Right tool
+        for HN-style lists, search results, product grids — collapses per-
+        site eval boilerplate to one call.
+
+        Example:
+            ub.extract_list("tr.athing", {
+                "title": ".titleline > a",
+                "url": ".titleline > a @href",
+                "rank": ".rank",
+            })
+        """
+        return self.call("extract_list", item_selector=item_selector,
+                         fields=fields, limit=limit)
 
     def extract(self, strategy: str | None = None) -> dict:
         """Auto-strategy structured-data extraction.

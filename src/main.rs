@@ -731,6 +731,24 @@ impl Session {
         self.eval(&format!("__extract({opts})"))
     }
 
+    // Pull a <table> into {headers, rows, row_count}. Right tool for
+    // pricing/specs/listings tables — saves the agent from writing a
+    // querySelectorAll('tr') + per-cell mapping eval.
+    fn extract_table(&self, selector: &str) -> Result<Value> {
+        let sel_lit = serde_json::to_string(selector)?;
+        self.eval(&format!("__extractTable({sel_lit})"))
+    }
+
+    // Pull a repeated card pattern into [{...}, ...]. `fields` maps field
+    // name -> CSS sub-selector (with optional " @attr" suffix for an
+    // attribute extraction). Right tool for HN-style lists, search results,
+    // product grids — collapses per-site eval boilerplate to one call.
+    fn extract_list(&self, item: &str, fields: &Value, limit: u32) -> Result<Value> {
+        let item_lit = serde_json::to_string(item)?;
+        let fields_lit = serde_json::to_string(fields)?;
+        self.eval(&format!("__extractList({item_lit}, {fields_lit}, {limit})"))
+    }
+
     // Drain the JS event loop: alternately runs queued microtasks (Promise
     // resolutions, queueMicrotask, etc.) and fires expired setTimeout/Interval
     // callbacks, sleeping to the next deadline when only timers remain.
@@ -1707,6 +1725,29 @@ async fn rpc_main(profile: Profile) -> Result<()> {
                     Err(e) => err_response(id, -6, e.to_string()),
                 }
             }
+            "extract_table" => match req.params.get("selector").and_then(|v| v.as_str()) {
+                Some(s) => match session.extract_table(s) {
+                    Ok(v) => ok_response(id, v),
+                    Err(e) => err_response(id, -6, e.to_string()),
+                },
+                None => err_response(id, -32602, "missing 'selector' param"),
+            },
+            "extract_list" => {
+                let item = req.params.get("item_selector").and_then(|v| v.as_str());
+                let fields = req.params.get("fields");
+                let limit = req
+                    .params
+                    .get("limit")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(1000) as u32;
+                match (item, fields) {
+                    (Some(i), Some(f)) => match session.extract_list(i, f, limit) {
+                        Ok(v) => ok_response(id, v),
+                        Err(e) => err_response(id, -6, e.to_string()),
+                    },
+                    _ => err_response(id, -32602, "missing 'item_selector' or 'fields' param"),
+                }
+            }
             "settle" => {
                 let max_ms = req
                     .params
@@ -1845,12 +1886,36 @@ fn mcp_tools() -> Value {
         },
         {
             "name": "extract",
-            "description": "Auto-strategy structured-data extraction. Tries JSON-LD (schema.org) → __NEXT_DATA__ → Nuxt → OpenGraph/meta → microdata → text_main fallback, returns the highest-confidence hit as {strategy, confidence, data, tried}. Use this as the one-shot 'give me the data, you figure out how' call when you don't want to plan the strategy yourself. Pass strategy='json_ld' (or any of the names above) to force a specific extractor.",
+            "description": "Auto-strategy structured-data extraction. Tries JSON-LD (schema.org) → __NEXT_DATA__ → Nuxt → JSON-in-script (Magento, Shopify, BigCommerce custom-typed scripts) → OpenGraph/meta → microdata → text_main fallback, returns the highest-confidence hit as {strategy, confidence, data, tried}. Use this as the one-shot 'give me the data, you figure out how' call when you don't want to plan the strategy yourself. Pass strategy='json_ld' (or any of the names above) to force a specific extractor.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "strategy": { "type": "string", "description": "Optional: force a specific extractor (json_ld, next_data, nuxt_data, og_meta, microdata, text_main)" }
+                    "strategy": { "type": "string", "description": "Optional: force a specific extractor (json_ld, next_data, nuxt_data, json_in_script, og_meta, microdata, text_main)" }
                 }
+            }
+        },
+        {
+            "name": "extract_table",
+            "description": "Pull a <table> into {headers, rows, row_count}. Headers come from <thead><th>...</th></thead> if present, else the first <tr>'s <th> cells. Each subsequent <tr>'s <td> cells become a row dict keyed by header (or 'col_N' if no header for that column). Right tool for pricing tables, specs, finance/listings tables — saves writing the per-cell mapping eval.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "selector": { "type": "string", "description": "CSS selector matching the <table> element" }
+                },
+                "required": ["selector"]
+            }
+        },
+        {
+            "name": "extract_list",
+            "description": "Pull a repeated card pattern into [{...}, {...}]. Right tool for HN-style lists, search results, product grids — collapses per-site eval boilerplate. Field spec shapes: 'css selector' (text content), 'css selector @attr' (attribute), or ['css selector', '@attr'] (tuple form). If a sub-selector returns null, the field value is null.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "item_selector": { "type": "string", "description": "CSS selector matching each card/row" },
+                    "fields": { "type": "object", "description": "{field_name: 'sub-selector' | 'sub-selector @attr' | ['sub-selector', '@attr']}" },
+                    "limit": { "type": "integer", "description": "Max items to extract (default 1000)" }
+                },
+                "required": ["item_selector", "fields"]
             }
         },
         {
@@ -1964,6 +2029,19 @@ async fn dispatch_tool(session: &mut Session, name: &str, args: &Value) -> Resul
         "extract" => {
             let strategy = str_arg("strategy");
             session.extract(strategy)
+        }
+        "extract_table" => {
+            let sel = str_arg("selector").ok_or_else(|| anyhow!("missing 'selector'"))?;
+            session.extract_table(sel)
+        }
+        "extract_list" => {
+            let item =
+                str_arg("item_selector").ok_or_else(|| anyhow!("missing 'item_selector'"))?;
+            let fields = args
+                .get("fields")
+                .ok_or_else(|| anyhow!("missing 'fields'"))?;
+            let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(1000) as u32;
+            session.extract_list(item, fields, limit)
         }
         "settle" => {
             let max_ms = args.get("max_ms").and_then(|v| v.as_u64()).unwrap_or(2000);
