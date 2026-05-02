@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, BufReader};
 
+mod network_store;
 mod policy;
 mod profile;
 use profile::Profile;
@@ -203,12 +204,16 @@ struct FetchResponse {
 struct FetchQueue {
     sender: mpsc::Sender<FetchRequest>,
     results: Arc<Mutex<Vec<FetchResponse>>>,
+    network_store: Arc<Mutex<network_store::NetworkStore>>,
 }
 
 fn spawn_fetch_worker(http: rquest::Client) -> FetchQueue {
     let (tx, rx) = mpsc::channel::<FetchRequest>();
     let results: Arc<Mutex<Vec<FetchResponse>>> = Arc::new(Mutex::new(Vec::new()));
     let results_for_thread = results.clone();
+    let network_store: Arc<Mutex<network_store::NetworkStore>> =
+        Arc::new(Mutex::new(network_store::NetworkStore::default()));
+    let store_for_thread = network_store.clone();
 
     std::thread::Builder::new()
         .name("unbrowser-fetch".to_string())
@@ -222,7 +227,23 @@ fn spawn_fetch_worker(http: rquest::Client) -> FetchQueue {
             };
             runtime.block_on(async move {
                 while let Ok(req) = rx.recv() {
+                    // Snapshot before move — FetchResponse doesn't carry url/method.
+                    let url = req.url.clone();
+                    let method = req.method.clone();
                     let resp = run_fetch(http.clone(), req).await;
+                    // Network capture: opportunistic content-bearing
+                    // response capture for the network_stores RPC. See
+                    // src/network_store.rs. Skipped for blocked URLs
+                    // because the policy hook in __host_fetch_send
+                    // short-circuits BEFORE this worker ever sees them
+                    // (synthetic 204 enqueued directly to results), so
+                    // tracker bodies are never even fetched.
+                    if resp.error.is_none()
+                        && !resp.body.is_empty()
+                        && let Ok(mut s) = store_for_thread.lock()
+                    {
+                        s.maybe_capture(&url, &method, resp.status, &resp.headers, &resp.body);
+                    }
                     if let Ok(mut g) = results_for_thread.lock() {
                         g.push(resp);
                     }
@@ -234,6 +255,7 @@ fn spawn_fetch_worker(http: rquest::Client) -> FetchQueue {
     FetchQueue {
         sender: tx,
         results,
+        network_store,
     }
 }
 
@@ -601,6 +623,9 @@ impl Session {
         // mostly diagnostic — the actual cookie storage already happened in
         // rquest's CookieStore impl.
         let mut headers: serde_json::Map<String, Value> = serde_json::Map::new();
+        // Parallel HashMap for network_store::maybe_capture (it needs a
+        // HashMap<String, String>, not the serde_json::Map shape we return).
+        let mut headers_flat: HashMap<String, String> = HashMap::new();
         for (name, value) in resp.headers() {
             let key = name.as_str().to_lowercase();
             let v = value.to_str().unwrap_or("").to_string();
@@ -609,13 +634,31 @@ impl Session {
                     *existing = format!("{existing} || {v}");
                 }
                 _ => {
-                    headers.insert(key, Value::String(v));
+                    headers.insert(key.clone(), Value::String(v.clone()));
                 }
             }
+            // For the network store: keep one value per name (last wins);
+            // the only multi-value header that matters here is Set-Cookie
+            // and it's not used for content-type classification.
+            headers_flat.insert(key, v);
         }
 
         let body = resp.text().await.context("read body")?;
         let bytes = body.len();
+
+        // Capture the navigate response itself into the network store.
+        // JSON-shaped landing pages (raw GraphQL endpoints, JSON feeds,
+        // route-data preloads) get surfaced via the network_stores RPC
+        // alongside fetch/XHR responses from page scripts. The navigate
+        // body is often the single most important content-bearing fetch
+        // on a JSON-API-shaped site. HTML pages are skipped by the
+        // classifier (text/html → score 0).
+        if (200..400).contains(&status)
+            && !body.is_empty()
+            && let Ok(mut s) = self._fetch.network_store.lock()
+        {
+            s.maybe_capture(&final_url, "GET", status, &headers_flat, &body);
+        }
 
         let challenge = detect_challenge(status, &body);
         if let Some(c) = &challenge {
@@ -1074,6 +1117,18 @@ impl Session {
             }),
         );
 
+        // network_stores: opportunistic capture of content-bearing
+        // fetch/XHR responses (JSON / GraphQL / NDJSON / route data).
+        // Navigate result includes a SUMMARY (count + top-K metadata)
+        // — full bodies are accessed via the network_stores RPC method
+        // to keep the navigate result reasonable in size.
+        let network_stores = self
+            ._fetch
+            .network_store
+            .lock()
+            .ok()
+            .map(|s| serde_json::to_value(s.summary(5)).unwrap_or(Value::Null));
+
         Ok(json!({
             "navigation_id": nav_id,
             "status": status,
@@ -1084,6 +1139,7 @@ impl Session {
             "challenge": challenge,
             "scripts": scripts,
             "extract": auto_extract,
+            "network_stores": network_stores,
         }))
     }
 
@@ -2357,6 +2413,27 @@ async fn rpc_main(profile: Profile) -> Result<()> {
                     Err(msg) => err_response(id, -32602, msg),
                 }
             }
+            "network_stores" => {
+                let limit = req
+                    .params
+                    .get("limit")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(20) as usize;
+                let host = req.params.get("host").and_then(|v| v.as_str());
+                let captures = session
+                    ._fetch
+                    .network_store
+                    .lock()
+                    .map(|s| s.ranked(limit, host))
+                    .unwrap_or_default();
+                ok_response(id, serde_json::to_value(&captures).unwrap_or(Value::Null))
+            }
+            "network_stores_clear" => {
+                if let Ok(mut s) = session._fetch.network_store.lock() {
+                    s.clear();
+                }
+                ok_response(id, json!({ "ok": true }))
+            }
             "close" => {
                 write_response(&mut out, &ok_response(id, json!("bye")))?;
                 return Ok(());
@@ -2558,6 +2635,22 @@ fn mcp_tools() -> Value {
                 },
                 "required": ["navigation_id", "success"]
             }
+        },
+        {
+            "name": "network_stores",
+            "description": "Return content-bearing fetch/XHR responses captured during navigate, ranked by likely content value. SPAs often keep their data in API responses (JSON, GraphQL, NDJSON, Next/Nuxt route data) that are cleaner than the rendered DOM — this tool surfaces them directly. Each entry has the URL, status, content-type, body (possibly truncated), and a heuristic score. Bodies for trackers/ads/CSS/HTML/media are NOT captured. The navigate result already contains a top-5 summary; use this tool to get more entries or filter by host.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "limit": { "type": "integer", "description": "Max entries to return (default 20).", "minimum": 1, "maximum": 100 },
+                    "host":  { "type": "string", "description": "Optional substring filter on response host." }
+                }
+            }
+        },
+        {
+            "name": "network_stores_clear",
+            "description": "Drop all captured network responses from the session's network store. Use this between unrelated navigations if you don't want earlier captures showing up in later network_stores calls.",
+            "inputSchema": { "type": "object", "properties": {} }
         }
     ])
 }
@@ -2651,6 +2744,23 @@ async fn dispatch_tool(session: &mut Session, name: &str, args: &Value) -> Resul
             let nav_id =
                 str_arg("navigation_id").ok_or_else(|| anyhow!("missing 'navigation_id'"))?;
             validate_and_emit_outcome(session, args, nav_id).map_err(|e| anyhow!(e))?;
+            Ok(json!({ "ok": true }))
+        }
+        "network_stores" => {
+            let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(20) as usize;
+            let host = str_arg("host");
+            let captures = session
+                ._fetch
+                .network_store
+                .lock()
+                .map(|s| s.ranked(limit, host))
+                .unwrap_or_default();
+            Ok(serde_json::to_value(&captures).unwrap_or(Value::Null))
+        }
+        "network_stores_clear" => {
+            if let Ok(mut s) = session._fetch.network_store.lock() {
+                s.clear();
+            }
             Ok(json!({ "ok": true }))
         }
         _ => Err(anyhow!("unknown tool: {name}")),
