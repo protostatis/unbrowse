@@ -42,6 +42,14 @@
   EventTarget.prototype.dispatchEvent = function(event) {
     event.target = this;
     event.currentTarget = this;
+    // Invoke the IDL "event handler" property (el.onload, el.onclick, etc.)
+    // before listeners — matches WHATWG ordering. Without this,
+    // `s.onload = fn; appendChild(s)` paths (every dynamic-script loader,
+    // every form.onsubmit, every button.onclick set inline) silently no-op.
+    var prop = 'on' + event.type;
+    if (typeof this[prop] === 'function') {
+      try { this[prop].call(this, event); } catch (e) {}
+    }
     var listeners = this._listeners[event.type] || [];
     for (var i = 0; i < listeners.length; i++) {
       listeners[i].call(this, event);
@@ -190,6 +198,124 @@
   Node.prototype = Object.create(EventTarget.prototype);
   Node.prototype.constructor = Node;
 
+  // Lightweight URL resolver — QuickJS has no native URL constructor.
+  // Handles the cases we actually see in dynamic script src:
+  //   absolute        : http(s)://host/path → returned as-is
+  //   protocol-rel    : //host/path → base.protocol + src
+  //   root-relative   : /path → base.origin + src
+  //   path-relative   : foo/bar → base.origin + base.dir + src
+  //   data:/blob:/etc : passed through unchanged (host layer rejects)
+  function __resolveURL(src, baseHref) {
+    if (!src) return src;
+    if (/^(?:[a-z][a-z0-9+.-]*:)?\/\//i.test(src) && /^[a-z]/i.test(src)) return src;
+    if (/^[a-z][a-z0-9+.-]*:/i.test(src)) return src; // data:, blob:, javascript:, etc.
+    var m = baseHref.match(/^(https?):\/\/([^\/]+)(\/[^?#]*)?/i);
+    if (!m) return src;
+    var origin = m[1] + '://' + m[2];
+    var path = m[3] || '/';
+    if (src.indexOf('//') === 0) {
+      return m[1] + ':' + src;
+    }
+    if (src.charAt(0) === '/') {
+      return origin + src;
+    }
+    var dir = path.substring(0, path.lastIndexOf('/') + 1);
+    return origin + dir + src;
+  }
+
+  // Dynamic script insertion handler.
+  //
+  // When page code does `s = createElement('script'); s.src = X; head.appendChild(s)`
+  // (the way every tag manager and every dynamic chunk loader works), the
+  // script must be fetched, evaluated, and have its `load` event fired so
+  // the inserting code's onload callback runs. Without this, app boot stalls
+  // anywhere a script awaits `s.onload`.
+  //
+  // This is the runtime equivalent of `main.rs`'s static script-fetch loop,
+  // but for scripts inserted by JS *after* parse. It piggybacks on `fetch()`
+  // (which routes through `__host_fetch_send` and therefore consults the
+  // policy module — blocked URLs short-circuit with synthetic 204).
+  //
+  // Important pairing-with-static-loop invariant: scripts inserted during
+  // `__seedDOM` use `buildChildren` (direct childNodes mutation), NOT
+  // `appendChild`. Scripts in the parsed HTML are then extracted+evaled by
+  // main.rs's static loop. Only TRULY dynamic insertions reach this path,
+  // so there's no double-execution risk.
+  //
+  // For a blocked URL (synthetic 204 from policy), we still fire `load` —
+  // not `error`. The page treats it as "the script tag manager loaded fine"
+  // and proceeds with boot, but the cascade scripts the tag manager would
+  // have injected never get a chance to run because its body never executed.
+  // This is the "stub_success" pattern — block the actual code while keeping
+  // the load callback chain intact.
+  function __maybeHandleDynamicScript(child) {
+    if (!child || child.tagName !== 'SCRIPT') return;
+    if (child.__unbHandled) return;
+    child.__unbHandled = true;
+
+    var attrs = child._attributes || {};
+    // Pages set s.src / s.type either via setAttribute (-> _attributes) or
+    // direct property assignment (-> JS slot). Real browsers reflect IDL
+    // properties to attributes; we don't, so check both. Direct property
+    // wins when present (matches what the page believes it set).
+    var type = ((child.type !== undefined ? child.type : attrs.type) || '').toString().toLowerCase();
+    // Skip non-JS script types (JSON-LD, application/json, x-tmpl, etc.).
+    // Empty type and "module" both count as JS.
+    var isJs = type === '' || type === 'module' || type.indexOf('javascript') !== -1;
+    if (!isJs) return;
+
+    var src = child.src !== undefined ? child.src : attrs.src;
+    if (src) {
+      // QuickJS doesn't expose a `URL` constructor. Manual resolver covers
+      // the cases we actually see: absolute, protocol-relative, root-relative,
+      // path-relative. Anything weirder (e.g. data:, blob:) we pass through
+      // unchanged and let the fetch/host layer handle.
+      var baseHref = (typeof location !== 'undefined' && location.href) || '';
+      var url = __resolveURL(src, baseHref);
+
+      if (typeof fetch !== 'function') {
+        // Pre-shim insertion (shouldn't happen in practice). Bail.
+        return;
+      }
+      fetch(url).then(function(resp) {
+        var status = resp.status;
+        if (status >= 200 && status < 300 && status !== 204) {
+          return resp.text().then(function(code) {
+            if (code) {
+              // Page-script errors must not reach our settle loop. Failures
+              // here are recorded only by the host's policy_blocked /
+              // script_executed events (or absence thereof).
+              try { (0, eval)(code); } catch (e) {}
+            }
+            child.dispatchEvent(new Event('load'));
+          });
+        } else if (status === 204) {
+          // Synthetic 204 from the policy hook (or genuine 204 from server).
+          // Fire load so the page's onload chain proceeds — this is the
+          // "stub_success" pattern. Block the actual code execution while
+          // keeping the load callback chain intact, so app boot doesn't
+          // stall on a tag-manager-ready callback.
+          child.dispatchEvent(new Event('load'));
+        } else {
+          child.dispatchEvent(new Event('error'));
+        }
+      }).catch(function() {
+        try { child.dispatchEvent(new Event('error')); } catch (e) {}
+      });
+    } else {
+      // Inline script — eval immediately, then fire load asynchronously
+      // (matches browser behavior: load events are not synchronous w.r.t.
+      // the appendChild call site).
+      var code = child.textContent || '';
+      if (code) {
+        try { (0, eval)(code); } catch (e) {}
+      }
+      Promise.resolve().then(function() {
+        try { child.dispatchEvent(new Event('load')); } catch (e) {}
+      });
+    }
+  }
+
   Node.prototype.appendChild = function(child) {
     if (child.nodeType === DOCUMENT_FRAGMENT_NODE) {
       var kids = child.childNodes.slice();
@@ -200,6 +326,7 @@
     child.parentNode = this;
     this.childNodes.push(child);
     recordMutation({ type: 'appendChild', parentId: this._id, childId: child._id, childDef: serializeNode(child) });
+    __maybeHandleDynamicScript(child);
     return child;
   };
 
@@ -225,6 +352,7 @@
     newChild.parentNode = this;
     this.childNodes.splice(idx, 0, newChild);
     recordMutation({ type: 'insertBefore', parentId: this._id, childId: newChild._id, refId: refChild._id, childDef: serializeNode(newChild) });
+    __maybeHandleDynamicScript(newChild);
     return newChild;
   };
 
