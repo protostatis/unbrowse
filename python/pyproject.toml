@@ -9,7 +9,7 @@ build-backend = "hatchling.build"
 # (cf. python-dateutil → `from dateutil import ...`); the import name and
 # binary stay `unbrowser` everywhere else.
 name = "pyunbrowser"
-version = "0.0.4"
+version = "0.0.5"
 description = "Web access for LLM agents. One static binary. No Chrome."
 readme = "README.md"
 license = { text = "Apache-2.0" }
@@ -36,6 +36,12 @@ classifiers = [
 Homepage = "https://github.com/protostatis/unbrowser"
 Repository = "https://github.com/protostatis/unbrowser"
 Issues = "https://github.com/protostatis/unbrowser/issues"
+
+# `pip install pyunbrowser` installs an `unbrowser` script on $PATH that
+# execs the bundled native binary. Lets MCP hosts use `command: "unbrowser"`
+# without knowing the wheel's site-packages path.
+[project.scripts]
+unbrowser = "unbrowser._cli:main"
 
 # The wheel ships the platform-specific native binary inside unbrowser/_bin/.
 # CI builds the binary first (cargo build --release for each target), copies

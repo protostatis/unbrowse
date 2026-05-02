@@ -170,6 +170,60 @@
     };
   }
 
+  // Magento, Shopify, BigCommerce, et al. embed product/page data in
+  // custom-typed <script> tags so their own client JS can consume it.
+  // Common shapes:
+  //   <script type="text/x-magento-init">{...}</script>     (Magento, often dozens per page)
+  //   <script type="text/x-shopify-app">{...}</script>      (Shopify)
+  //   <script type="application/vnd.shopify.product+json">  (newer Shopify)
+  //   <script id="bc-product">{...}</script>                (BigCommerce)
+  //
+  // Generalized: any <script> whose `type` is not a JS variant AND whose
+  // textContent parses as JSON. We collect them keyed by type, returning
+  // a flat object the agent can iterate. This catches the SSR-but-
+  // products-in-script class of pages that look "static" (full nav chrome
+  // + filter UI + headings) but whose actual data lives in script tags.
+  function strategyJsonInScript() {
+    var scripts = document.querySelectorAll('script[type]');
+    if (!scripts.length) return null;
+    var collected = {}; // type -> [parsed blobs]
+    var hits = 0;
+    for (var i = 0; i < scripts.length; i++) {
+      var s = scripts[i];
+      var t = (s.getAttribute('type') || '').toLowerCase();
+      // Skip pure JS — already-recognized JSON shapes are handled by
+      // dedicated strategies (json_ld, next_data, nuxt_data, og_meta).
+      if (!t || t === 'text/javascript' || t === 'module' ||
+          t === 'application/javascript' ||
+          t === 'application/ld+json') continue;
+      // Only consider types that strongly imply JSON payload.
+      var looksJson = t.indexOf('json') !== -1 ||
+                      t.indexOf('x-magento') !== -1 ||
+                      t.indexOf('x-shopify') !== -1 ||
+                      t.indexOf('x-component') !== -1;
+      if (!looksJson) continue;
+      var raw = (s.textContent || '').trim();
+      if (!raw || raw[0] !== '{' && raw[0] !== '[') continue;
+      var parsed = safeJSONParse(raw);
+      if (!parsed) continue;
+      if (!collected[t]) collected[t] = [];
+      collected[t].push(parsed);
+      hits++;
+    }
+    if (!hits) return null;
+    // Confidence rises with how many script types we picked up; a single
+    // type with one blob is moderate, multiple types or many blobs is
+    // high (signals a real SSR-with-JSON-config page like Magento).
+    var typeCount = Object.keys(collected).length;
+    var conf = typeCount > 1 ? 0.85 : (hits > 5 ? 0.75 : 0.6);
+    return {
+      strategy: 'json_in_script',
+      confidence: conf,
+      data: collected,
+      hint: hits + ' JSON-bearing script(s) across ' + typeCount + ' type(s)',
+    };
+  }
+
   function strategyTextMain() {
     // Always last-resort. The Rust side already exposes text_main via RPC,
     // but we duplicate a thin version here so the extract pipeline can run
@@ -187,6 +241,95 @@
     return null;
   }
 
+  // extract_table — pull a <table> into {headers, rows}. Headers come
+  // from <thead><th>...</th></thead> if present, else the first <tr>'s
+  // <th> cells. Each subsequent <tr>'s <td> cells become a row dict
+  // keyed by header (or 'col_N' if no header for that column).
+  globalThis.__extractTable = function (selector) {
+    var table = document.querySelector(selector);
+    if (!table) return null;
+    var headers = [];
+    var thead = table.querySelector('thead');
+    var headerRow = thead ? thead.querySelector('tr') : null;
+    if (!headerRow) {
+      // Look for the first <tr> that has <th> cells.
+      var trs = table.querySelectorAll('tr');
+      for (var i = 0; i < trs.length; i++) {
+        if (trs[i].querySelector('th')) { headerRow = trs[i]; break; }
+      }
+    }
+    if (headerRow) {
+      var hcells = headerRow.querySelectorAll('th');
+      for (var hi = 0; hi < hcells.length; hi++) {
+        headers.push((hcells[hi].textContent || '').trim());
+      }
+    }
+    var rows = [];
+    var bodyTrs = table.querySelectorAll('tbody tr');
+    if (!bodyTrs.length) {
+      bodyTrs = [];
+      var allTrs = table.querySelectorAll('tr');
+      for (var ti = 0; ti < allTrs.length; ti++) {
+        if (allTrs[ti] !== headerRow) bodyTrs.push(allTrs[ti]);
+      }
+    }
+    for (var r = 0; r < bodyTrs.length; r++) {
+      var tds = bodyTrs[r].querySelectorAll('td');
+      if (!tds.length) continue;
+      var rowObj = {};
+      for (var c = 0; c < tds.length; c++) {
+        var key = headers[c] || ('col_' + c);
+        rowObj[key] = (tds[c].textContent || '').trim();
+      }
+      rows.push(rowObj);
+    }
+    return { headers: headers, rows: rows, row_count: rows.length };
+  };
+
+  // extract_list — pull a repeated card pattern into [{...}, {...}].
+  // `itemSelector` matches each card; `fields` maps field names to
+  // sub-selectors. Field spec shapes:
+  //   "css selector"          -> textContent of first match
+  //   "css selector @attr"    -> value of `attr` on first match
+  //   ["css selector", "@attr"] -> same, tuple form
+  // If the sub-selector returns null, the field value is null.
+  globalThis.__extractList = function (itemSelector, fields, limit) {
+    limit = limit || 1000;
+    var items = document.querySelectorAll(itemSelector);
+    var out = [];
+    var fieldNames = Object.keys(fields || {});
+    for (var i = 0; i < items.length && i < limit; i++) {
+      var item = items[i];
+      var rec = {};
+      for (var fi = 0; fi < fieldNames.length; fi++) {
+        var name = fieldNames[fi];
+        var spec = fields[name];
+        var sel = null;
+        var attr = null;
+        if (typeof spec === 'string') {
+          var m = spec.match(/^(.+?)\s*@(\S+)$/);
+          if (m) { sel = m[1].trim(); attr = m[2]; }
+          else { sel = spec; }
+        } else if (Array.isArray(spec) && spec.length === 2) {
+          sel = spec[0];
+          attr = String(spec[1]).replace(/^@/, '');
+        } else {
+          rec[name] = null;
+          continue;
+        }
+        var el = sel ? item.querySelector(sel) : item;
+        if (!el) { rec[name] = null; continue; }
+        if (attr) {
+          rec[name] = el.getAttribute(attr);
+        } else {
+          rec[name] = (el.textContent || '').trim();
+        }
+      }
+      out.push(rec);
+    }
+    return out;
+  };
+
   globalThis.__extract = function (opts) {
     opts = opts || {};
     var requested = opts.strategy; // optional: force a specific strategy
@@ -194,6 +337,7 @@
       ['json_ld', strategyJsonLd],
       ['next_data', strategyNextData],
       ['nuxt_data', strategyNuxtData],
+      ['json_in_script', strategyJsonInScript],   // Magento, Shopify, etc.
       ['og_meta', strategyOgMeta],
       ['microdata', strategyMicrodata],
       ['text_main', strategyTextMain],

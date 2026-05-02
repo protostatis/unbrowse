@@ -31,11 +31,11 @@ unbrowser --mcp
 ```bash
 # macOS Apple Silicon
 curl -L https://github.com/protostatis/unbrowser/releases/latest/download/unbrowser-aarch64-apple-darwin.tar.gz | tar xz
+# macOS Intel
+curl -L https://github.com/protostatis/unbrowser/releases/latest/download/unbrowser-x86_64-apple-darwin.tar.gz | tar xz
 # Linux x86_64 (glibc 2.35+)
 curl -L https://github.com/protostatis/unbrowser/releases/latest/download/unbrowser-x86_64-unknown-linux-gnu.tar.gz | tar xz
 ```
-
-**macOS Intel**: no prebuilt — `cargo install unbrowser` is the path. (GitHub's `macos-13` runner pool is being deprecated and CI allocations were exceeding an hour. We'll re-enable Intel Mac wheels via cross-compile from Apple Silicon in a future release.)
 
 **From source**:
 
@@ -51,7 +51,7 @@ echo '{"id":1,"method":"navigate","params":{"url":"https://news.ycombinator.com"
 
 That's the install. Runs anywhere a static binary runs — laptop, Lambda, Cloudflare Workers, edge, embedded.
 
-Open source under Apache 2.0. Hosted at **[unchainedsky.com](https://unchainedsky.com)** if you'd rather skip the ops.
+Open source under Apache 2.0. When the cheap path can't handle a page (heavy SPAs, behavioral bot challenges), escalate to a real browser via [`unchainedsky-cli`](https://github.com/protostatis/unchainedsky-cli) (drives your local Chrome via CDP) or the [Unchained desktop app](https://unchainedsky.com).
 
 ---
 
@@ -131,8 +131,8 @@ Empirical, not aspirational. Latest matrix: **28/30** on tested categories.
 | **Bot-walled with cookie handoff** (Zillow, Cloudflare-protected sites) | ✅ via `cookies_set` | solve once in Chrome, replay forever; `challenge.provider` field tells the agent which vendor |
 | **Module-loader SPAs** (Ember, AMD apps like crates.io) | ⚠️ partial with `exec_scripts: true` | bundles fetch + execute, modules register, but framework auto-mount needs case-by-case shimming |
 | **Heavy React/Vue bundles** (react.dev runtime, large dashboard apps) | ⚠️ bounded — won't hang, won't render | with `exec_scripts: true` the navigate completes inside the 30s wall-clock budget (5s for the script-eval phase, the rest for settle); rendered DOM may not materialize. Tune via `UNBROWSER_TIMEOUT_MS` |
-| **Apps requiring Workers / Canvas / IndexedDB / WebGL** | ❌ out of scope by design | use the cookie-handoff path with real Chrome via [unchainedsky.com](https://unchainedsky.com) |
-| **Hardest-tier anti-bot** (PerimeterX with behavioral, Kasada, Akamai BMP advanced) | ❌ even cookie handoff is fragile | managed service is the right tier |
+| **Apps requiring Workers / Canvas / IndexedDB / WebGL** | ❌ out of scope by design | use the cookie-handoff path with real Chrome via [`unchainedsky-cli`](https://github.com/protostatis/unchainedsky-cli) (CDP) or the [Unchained desktop app](https://unchainedsky.com) |
+| **Hardest-tier anti-bot** (PerimeterX with behavioral, Kasada, Akamai BMP advanced) | ❌ even cookie handoff is fragile | real Chrome via CDP is the right tier |
 
 **Vs the alternatives:**
 
@@ -225,18 +225,20 @@ unbrowser 2> >(python3 scripts/watch.py)
 
 CSS selector engine: tag, id, class, `[attr=val]` (also `^=`, `$=`, `*=`, `~=`), all four combinators (` `, `>`, `+`, `~`), `:first/last/nth-child/of-type`, `:only-child/of-type`. Use `eval` for `:not()`, `:has()`, formulas.
 
-## Self-host vs managed
+## When to escalate to real Chrome
 
-| | This binary | [unchainedsky.com](https://unchainedsky.com) |
-|---|---|---|
-| Cheap-path scraping | ✅ | ✅ |
-| Real-Chrome escalation | DIY | ✅ included |
-| Cookie cache across workers | DIY | ✅ |
-| Built-in Claude agent loop | DIY | ✅ |
-| Time to first scrape | one cargo build | one API key |
-| You own the ops | ✅ | nope, we do |
+This binary is the cheap path. For the cases it can't handle (heavy framework hydration, behavioral bot challenges, Workers/Canvas/IndexedDB), the next tier is a real Chrome instance driven via CDP. Two ways to get there:
 
-The vocabulary is the same. Code written against this binary works against the hosted service.
+| | This binary | [`unchainedsky-cli`](https://github.com/protostatis/unchainedsky-cli) | [Unchained desktop app](https://unchainedsky.com) |
+|---|---|---|---|
+| Runs JS | QuickJS (no V8 JIT) | real Chrome via CDP | real Chrome (the user's, with their logins) |
+| SPA hydration | partial | ✅ | ✅ |
+| Bot challenges | cookie handoff only | active solving via real browser | manual / interactive |
+| Setup | `pip install pyunbrowser` | `pip install unchainedsky-cli` | desktop install |
+| Audience | agent / pipeline | agent / pipeline | end user |
+| Per-page footprint | ~50MB | full Chrome | full Chrome |
+
+The escalation path is a deliberate choice, not an automatic fallback — you ship `pyunbrowser` for the 80% of pages that work cheap, then route the 20% to `unchainedsky-cli` (or to a human via the desktop app). The vocabulary (`navigate`, `query`, `click`, `cookies_set`, BlockMap) is shared so code transfers cleanly.
 
 ## Honest limits
 
@@ -276,4 +278,4 @@ Apache 2.0 — see [LICENSE](./LICENSE).
 
 ---
 
-If this is useful and you'd rather not run it yourself: **[unchainedsky.com](https://unchainedsky.com)** is the hosted version, same vocabulary, no ops.
+For the cases this binary can't handle (heavy framework hydration, behavioral bot challenges, anything needing real Chrome), the next tier is [`unchainedsky-cli`](https://github.com/protostatis/unchainedsky-cli) — drives a real Chrome via CDP, same vocabulary. End-users who want a point-and-click agent can skip the CLI entirely and use the [Unchained desktop app](https://unchainedsky.com).

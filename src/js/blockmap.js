@@ -210,13 +210,23 @@
       suspicious(tableDensity, 3) ||   // even a few empty tables is a strong signal
       thinShell;                       // SPA shell with no rendered content
 
-    // JSON script tags often carry the data the JS rendering would fill in
-    // (Next.js __NEXT_DATA__, ld+json, custom application/json blocks).
-    // Hint to the agent: try `eval` to read these directly instead of waiting
-    // for client-side rendering.
-    var jsonScripts = document.querySelectorAll(
-      'script[type="application/json"], script[type="application/ld+json"]'
-    ).length;
+    // JSON-bearing script tags often carry the data the JS rendering would
+    // fill in. Beyond the standard application/json + application/ld+json,
+    // commerce platforms use custom MIME-like types: text/x-magento-init,
+    // text/x-shopify-app, application/vnd.shopify.product+json, etc. Count
+    // all of them so the density signal accurately predicts whether
+    // extract() will find structured data.
+    var jsonScripts = 0;
+    var allScripts = document.querySelectorAll('script[type]');
+    for (var jsIdx = 0; jsIdx < allScripts.length; jsIdx++) {
+      var jsType = (allScripts[jsIdx].getAttribute('type') || '').toLowerCase();
+      if (jsType.indexOf('json') !== -1 ||
+          jsType.indexOf('x-magento') !== -1 ||
+          jsType.indexOf('x-shopify') !== -1 ||
+          jsType.indexOf('x-component') !== -1) {
+        jsonScripts++;
+      }
+    }
 
     // Fold into the ASCII summary.
     var hasDensity = tdDensity || liDensity || tableDensity;
@@ -229,7 +239,7 @@
       ascii.push(densityLine);
     }
     if (jsonScripts > 0) {
-      ascii.push('  JSON SCRIPTS: ' + jsonScripts + ' (data may be embedded — try eval on document.querySelector(\'script[type=\"application/json\"]\').textContent)');
+      ascii.push('  JSON SCRIPTS: ' + jsonScripts + ' (data may be embedded — try `extract()` first, it covers ld+json / __NEXT_DATA__ / Magento / Shopify)');
     }
 
     return {

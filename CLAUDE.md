@@ -112,20 +112,20 @@ Skip `bridge.js` (no iframe). Skip the WebSocket/server layers entirely.
 
 ## MCP integration
 
-Add to your MCP host's config (Claude Desktop's `claude_desktop_config.json`, Claude Code's `.mcp.json`, etc.):
+Add to your MCP host's config (Claude Desktop's `claude_desktop_config.json`, Claude Code's `.mcp.json`, etc.). Once `unbrowser` is on `$PATH` (via `pip install pyunbrowser`, `cargo install unbrowser`, or `brew install unbrowser`):
 
 ```json
 {
   "mcpServers": {
-    "unchained-headless": {
-      "command": "/Users/zhiminzou/Projects/unbrowser/target/release/unbrowser",
+    "unbrowser": {
+      "command": "unbrowser",
       "args": ["--mcp"]
     }
   }
 }
 ```
 
-(or `target/debug/unbrowser` for the debug build during development). All 12 tools discoverable via `tools/list`.
+For a development checkout, use the explicit path: `command: "/path/to/repo/target/release/unbrowser"`. All RPC methods are exposed as MCP tools (everything except `close` — host manages lifecycle); discoverable via `tools/list`.
 
 **BlockMap shape:** `{title, structure: [{role, ref, ident, counts, summary}], headings: [{level, text, ref}], interactives: {links, buttons, inputs: [...], forms: [...]}, density: {tables, td, li, json_scripts, likely_js_filled}, ascii: "<multiline>"}`. The `ascii` field is human-readable; `structure`/`headings`/`interactives`/`density` are what the agent uses to plan queries. Landmarks (`header, nav, main, aside, footer, article, section`) are detected first; if none, the walker falls back to significant top-level children of `<body>`.
 
