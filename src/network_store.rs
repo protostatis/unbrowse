@@ -23,21 +23,42 @@ use std::collections::{HashMap, VecDeque};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const DEFAULT_MAX_ENTRIES: usize = 100;
-const DEFAULT_MAX_TOTAL_BYTES: usize = 4 * 1024 * 1024; // 4 MB
-const DEFAULT_MAX_BODY_BYTES: usize = 64 * 1024; // 64 KB per capture
+const DEFAULT_MAX_TOTAL_BYTES: usize = 16 * 1024 * 1024; // 16 MB (bumped from 4 MB)
+// Bumped from 64 KB to 256 KB. Most JSON-API responses (paginated listings,
+// graphql queries) fit within this and parse cleanly; truncated bodies
+// previously could produce invalid JSON for Zillow-style listings or large
+// graph queries. (PR #7 review medium.)
+const DEFAULT_MAX_BODY_BYTES: usize = 256 * 1024;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct NetworkCapture {
+    /// Stable per-process auto-incrementing id. Forward-compat hook for a
+    /// future `network_store_get {capture_id}` that returns full body if
+    /// we ever store more than the preview. (PR #7 review medium.)
+    pub capture_id: u64,
     pub url: String,
     pub method: String,
     pub status: u16,
     pub content_type: String,
+    /// Original full body length, before truncation.
     pub body_bytes: usize,
+    /// True when `body_preview` is truncated; consumers must NOT assume
+    /// the preview parses as valid JSON in that case.
     pub body_truncated: bool,
-    pub body: String,
+    /// Truncated preview of the body, up to `max_body_bytes`. Renamed from
+    /// `body` (PR #7 review medium) so the API surface makes truncation
+    /// explicit; full retrieval is not currently supported (we don't store
+    /// more than the preview).
+    pub body_preview: String,
     pub captured_at_ms: u64,
     pub score: u32,
     pub kind: ContentKind,
+    /// nav_id of the navigation that was in flight when this fetch
+    /// resolved. None for fetches issued outside any navigation. The
+    /// navigate result and the network_stores RPC default to filtering
+    /// on the current/most-recent navigation_id so page A captures don't
+    /// leak into page B's summary. (PR #7 review medium.)
+    pub navigation_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -56,6 +77,7 @@ pub enum ContentKind {
 pub struct NetworkStore {
     captures: VecDeque<NetworkCapture>,
     current_bytes: usize,
+    next_capture_id: u64,
     pub max_entries: usize,
     pub max_total_bytes: usize,
     pub max_body_bytes: usize,
@@ -66,6 +88,7 @@ impl Default for NetworkStore {
         Self {
             captures: VecDeque::new(),
             current_bytes: 0,
+            next_capture_id: 1,
             max_entries: DEFAULT_MAX_ENTRIES,
             max_total_bytes: DEFAULT_MAX_TOTAL_BYTES,
             max_body_bytes: DEFAULT_MAX_BODY_BYTES,
@@ -73,8 +96,20 @@ impl Default for NetworkStore {
     }
 }
 
+/// Filter for ranked() / summary(): which navigation_id(s) to consider.
+#[derive(Debug, Clone)]
+pub enum NavScope<'a> {
+    /// Only captures bound to this navigation_id (None matches captures with
+    /// no nav binding).
+    Only(&'a str),
+    /// All captures regardless of navigation_id.
+    All,
+}
+
 impl NetworkStore {
     /// Inspect a completed fetch response and capture if content-bearing.
+    /// `navigation_id` is the in-flight navigation when the fetch resolved
+    /// (None for fetches issued outside any navigate call).
     /// Returns true if captured.
     pub fn maybe_capture(
         &mut self,
@@ -83,6 +118,7 @@ impl NetworkStore {
         status: u16,
         headers: &HashMap<String, String>,
         body: &str,
+        navigation_id: Option<&str>,
     ) -> bool {
         // Only successful responses; non-2xx is typically auth/redirect
         // noise, not content.
@@ -122,37 +158,51 @@ impl NetworkStore {
             || self.current_bytes + stored_body.len() > self.max_total_bytes
         {
             if let Some(old) = self.captures.pop_front() {
-                self.current_bytes = self.current_bytes.saturating_sub(old.body.len());
+                self.current_bytes = self.current_bytes.saturating_sub(old.body_preview.len());
             } else {
                 break;
             }
         }
 
         self.current_bytes += stored_body.len();
+        let capture_id = self.next_capture_id;
+        self.next_capture_id += 1;
         self.captures.push_back(NetworkCapture {
+            capture_id,
             url: url.to_string(),
             method: method.to_string(),
             status,
             content_type,
             body_bytes,
             body_truncated,
-            body: stored_body,
+            body_preview: stored_body,
             captured_at_ms: now_ms(),
             score,
             kind,
+            navigation_id: navigation_id.map(String::from),
         });
         true
     }
 
-    /// Top N captures by score, optionally filtered by host substring.
-    /// Returned in score-descending order. `body` field is preserved.
-    pub fn ranked(&self, limit: usize, host_filter: Option<&str>) -> Vec<NetworkCapture> {
+    /// Top N captures by score, optionally filtered by host substring and
+    /// navigation scope. Returned in score-descending order. `body_preview`
+    /// is preserved on each entry.
+    pub fn ranked(
+        &self,
+        limit: usize,
+        host_filter: Option<&str>,
+        nav_scope: NavScope,
+    ) -> Vec<NetworkCapture> {
         let mut v: Vec<NetworkCapture> = self
             .captures
             .iter()
             .filter(|c| match host_filter {
                 None => true,
                 Some(h) => host_of(&c.url).contains(h),
+            })
+            .filter(|c| match &nav_scope {
+                NavScope::All => true,
+                NavScope::Only(id) => c.navigation_id.as_deref() == Some(id),
             })
             .cloned()
             .collect();
@@ -162,16 +212,27 @@ impl NetworkStore {
     }
 
     /// Quick summary for embedding in navigate result without dumping bodies.
-    pub fn summary(&self, top_k: usize) -> NetworkStoreSummary {
-        let mut tops: Vec<&NetworkCapture> = self.captures.iter().collect();
+    /// `nav_scope` defaults to filtering by current nav_id when called from
+    /// navigate_with — page B never sees page A's captures in its summary.
+    pub fn summary(&self, top_k: usize, nav_scope: NavScope) -> NetworkStoreSummary {
+        let scoped: Vec<&NetworkCapture> = self
+            .captures
+            .iter()
+            .filter(|c| match &nav_scope {
+                NavScope::All => true,
+                NavScope::Only(id) => c.navigation_id.as_deref() == Some(id),
+            })
+            .collect();
+        let mut tops = scoped.clone();
         tops.sort_by_key(|c| std::cmp::Reverse(c.score));
         tops.truncate(top_k);
         NetworkStoreSummary {
-            count: self.captures.len(),
-            total_bytes: self.current_bytes,
+            count: scoped.len(),
+            total_bytes: scoped.iter().map(|c| c.body_preview.len()).sum(),
             top: tops
                 .iter()
                 .map(|c| NetworkCaptureMeta {
+                    capture_id: c.capture_id,
                     url: c.url.clone(),
                     status: c.status,
                     content_type: c.content_type.clone(),
@@ -179,6 +240,7 @@ impl NetworkStore {
                     body_truncated: c.body_truncated,
                     score: c.score,
                     kind: c.kind,
+                    navigation_id: c.navigation_id.clone(),
                 })
                 .collect(),
         }
@@ -204,6 +266,7 @@ pub struct NetworkStoreSummary {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct NetworkCaptureMeta {
+    pub capture_id: u64,
     pub url: String,
     pub status: u16,
     pub content_type: String,
@@ -211,6 +274,7 @@ pub struct NetworkCaptureMeta {
     pub body_truncated: bool,
     pub score: u32,
     pub kind: ContentKind,
+    pub navigation_id: Option<String>,
 }
 
 /// Heuristic ranking. Score 0 means "skip this response."
@@ -349,61 +413,65 @@ mod tests {
         m
     }
 
+    fn cap(s: &mut NetworkStore, url: &str, ct: &str, body: &str) -> bool {
+        s.maybe_capture(url, "GET", 200, &h(ct), body, None)
+    }
+    fn cap_nav(s: &mut NetworkStore, url: &str, ct: &str, body: &str, nav: &str) -> bool {
+        s.maybe_capture(url, "GET", 200, &h(ct), body, Some(nav))
+    }
+
     #[test]
     fn captures_application_json() {
         let mut s = NetworkStore::default();
         let body = r#"{"data": {"items": [1,2,3], "total": 42}}"#;
-        assert!(s.maybe_capture(
+        assert!(cap(
+            &mut s,
             "https://api.example.com/v1/items",
-            "GET",
-            200,
-            &h("application/json"),
+            "application/json",
             body
         ));
         assert_eq!(s.len(), 1);
-        let r = &s.ranked(10, None)[0];
+        let r = &s.ranked(10, None, NavScope::All)[0];
         assert_eq!(r.kind, ContentKind::Json);
         assert!(r.score >= 30);
+        assert_eq!(r.capture_id, 1);
     }
 
     #[test]
     fn captures_graphql() {
         let mut s = NetworkStore::default();
-        let body = r#"{"data":{"viewer":{"id":"x"}}}"#;
         assert!(s.maybe_capture(
             "https://api.example.com/graphql",
             "POST",
             200,
             &h("application/graphql+json"),
-            body
+            r#"{"data":{"viewer":{"id":"x"}}}"#,
+            None,
         ));
-        let r = &s.ranked(10, None)[0];
+        let r = &s.ranked(10, None, NavScope::All)[0];
         assert_eq!(r.kind, ContentKind::GraphQl);
     }
 
     #[test]
     fn captures_next_route_data() {
         let mut s = NetworkStore::default();
-        let body = r#"{"pageProps":{"data":[1,2,3]}}"#;
-        assert!(s.maybe_capture(
+        assert!(cap(
+            &mut s,
             "https://example.com/_next/data/abc/page.json",
-            "GET",
-            200,
-            &h("application/json"),
-            body
+            "application/json",
+            r#"{"pageProps":{"data":[1,2,3]}}"#
         ));
-        let r = &s.ranked(10, None)[0];
+        let r = &s.ranked(10, None, NavScope::All)[0];
         assert_eq!(r.kind, ContentKind::NextRouteData);
     }
 
     #[test]
     fn skips_html() {
         let mut s = NetworkStore::default();
-        assert!(!s.maybe_capture(
+        assert!(!cap(
+            &mut s,
             "https://example.com/",
-            "GET",
-            200,
-            &h("text/html"),
+            "text/html",
             "<html>x</html>"
         ));
         assert_eq!(s.len(), 0);
@@ -412,25 +480,22 @@ mod tests {
     #[test]
     fn skips_image_css_js() {
         let mut s = NetworkStore::default();
-        assert!(!s.maybe_capture(
+        assert!(!cap(
+            &mut s,
             "https://example.com/x.png",
-            "GET",
-            200,
-            &h("image/png"),
+            "image/png",
             "binary"
         ));
-        assert!(!s.maybe_capture(
+        assert!(!cap(
+            &mut s,
             "https://example.com/x.css",
-            "GET",
-            200,
-            &h("text/css"),
+            "text/css",
             "body{}"
         ));
-        assert!(!s.maybe_capture(
+        assert!(!cap(
+            &mut s,
             "https://example.com/x.js",
-            "GET",
-            200,
-            &h("application/javascript"),
+            "application/javascript",
             "var x=1"
         ));
         assert_eq!(s.len(), 0);
@@ -439,38 +504,26 @@ mod tests {
     #[test]
     fn skips_non_2xx() {
         let mut s = NetworkStore::default();
-        assert!(!s.maybe_capture(
-            "https://api.example.com/v1/x",
-            "GET",
-            401,
-            &h("application/json"),
-            r#"{"error":"unauth"}"#
-        ));
-        assert!(!s.maybe_capture(
-            "https://api.example.com/v1/x",
-            "GET",
-            500,
-            &h("application/json"),
-            r#"{"error":"oops"}"#
-        ));
-        assert!(!s.maybe_capture(
-            "https://api.example.com/v1/x",
-            "GET",
-            302,
-            &h("application/json"),
-            r#"{}"#
-        ));
+        for status in [401u16, 500, 302] {
+            assert!(!s.maybe_capture(
+                "https://api.example.com/v1/x",
+                "GET",
+                status,
+                &h("application/json"),
+                r#"{"error":"x"}"#,
+                None,
+            ));
+        }
         assert_eq!(s.len(), 0);
     }
 
     #[test]
     fn skips_empty_body() {
         let mut s = NetworkStore::default();
-        assert!(!s.maybe_capture(
+        assert!(!cap(
+            &mut s,
             "https://api.example.com/v1/x",
-            "GET",
-            200,
-            &h("application/json"),
+            "application/json",
             ""
         ));
     }
@@ -478,40 +531,35 @@ mod tests {
     #[test]
     fn truncates_large_body() {
         let mut s = NetworkStore::default();
-        let big = "{".to_string() + &"\"k\":\"v\",".repeat(20_000) + "\"end\":1}";
-        assert!(s.maybe_capture(
+        let big = "{".to_string() + &"\"k\":\"v\",".repeat(60_000) + "\"end\":1}";
+        assert!(cap(
+            &mut s,
             "https://api.example.com/v1/x",
-            "GET",
-            200,
-            &h("application/json"),
+            "application/json",
             &big
         ));
-        let r = &s.ranked(10, None)[0];
+        let r = &s.ranked(10, None, NavScope::All)[0];
         assert!(r.body_truncated);
         assert_eq!(r.body_bytes, big.len());
-        assert!(r.body.len() <= s.max_body_bytes);
+        assert!(r.body_preview.len() <= s.max_body_bytes);
     }
 
     #[test]
     fn ranks_by_score() {
         let mut s = NetworkStore::default();
-        // Plain JSON, no path bonus
-        s.maybe_capture(
+        cap(
+            &mut s,
             "https://example.com/data.json",
-            "GET",
-            200,
-            &h("application/json"),
+            "application/json",
             r#"{"a":1}"#,
         );
-        // GraphQL — should outscore plain JSON
-        s.maybe_capture(
+        cap(
+            &mut s,
             "https://example.com/graphql",
-            "POST",
-            200,
-            &h("application/graphql+json"),
+            "application/graphql+json",
             r#"{"data":{"x":[1,2,3]}}"#,
         );
-        let r = s.ranked(10, None);
+        let r = s.ranked(10, None, NavScope::All);
         assert_eq!(r.len(), 2);
         assert_eq!(r[0].kind, ContentKind::GraphQl);
     }
@@ -524,17 +572,19 @@ mod tests {
         };
         for i in 0..5 {
             let url = format!("https://api.example.com/v1/item/{i}");
-            s.maybe_capture(
+            cap(
+                &mut s,
                 &url,
-                "GET",
-                200,
-                &h("application/json"),
+                "application/json",
                 &format!(r#"{{"id":{i}}}"#),
             );
         }
         assert_eq!(s.len(), 3);
-        // Oldest two should be evicted
-        let urls: Vec<_> = s.ranked(10, None).into_iter().map(|c| c.url).collect();
+        let urls: Vec<_> = s
+            .ranked(10, None, NavScope::All)
+            .into_iter()
+            .map(|c| c.url)
+            .collect();
         assert!(urls.iter().any(|u| u.ends_with("/2")));
         assert!(urls.iter().any(|u| u.ends_with("/4")));
         assert!(!urls.iter().any(|u| u.ends_with("/0")));
@@ -543,22 +593,110 @@ mod tests {
     #[test]
     fn host_filter_works() {
         let mut s = NetworkStore::default();
-        s.maybe_capture(
+        cap(
+            &mut s,
             "https://api.first.com/v1/x",
-            "GET",
-            200,
-            &h("application/json"),
+            "application/json",
             r#"{"a":1}"#,
         );
-        s.maybe_capture(
+        cap(
+            &mut s,
             "https://api.second.com/v1/x",
-            "GET",
-            200,
-            &h("application/json"),
+            "application/json",
             r#"{"b":2}"#,
         );
-        let r = s.ranked(10, Some("first"));
+        let r = s.ranked(10, Some("first"), NavScope::All);
         assert_eq!(r.len(), 1);
         assert!(r[0].url.contains("first.com"));
+    }
+
+    #[test]
+    fn capture_ids_monotonic() {
+        let mut s = NetworkStore::default();
+        for i in 0..3 {
+            cap(
+                &mut s,
+                &format!("https://api.example.com/v1/{i}"),
+                "application/json",
+                r#"{"a":1}"#,
+            );
+        }
+        let r = s.ranked(10, None, NavScope::All);
+        let mut ids: Vec<u64> = r.iter().map(|c| c.capture_id).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn nav_scope_filters_correctly() {
+        // Page A's captures shouldn't surface in page B's summary. (PR #7 review.)
+        let mut s = NetworkStore::default();
+        cap_nav(
+            &mut s,
+            "https://api.a.com/x",
+            "application/json",
+            r#"{"a":1}"#,
+            "nav_1",
+        );
+        cap_nav(
+            &mut s,
+            "https://api.a.com/y",
+            "application/json",
+            r#"{"a":2}"#,
+            "nav_1",
+        );
+        cap_nav(
+            &mut s,
+            "https://api.b.com/z",
+            "application/json",
+            r#"{"b":1}"#,
+            "nav_2",
+        );
+
+        let r1 = s.ranked(10, None, NavScope::Only("nav_1"));
+        assert_eq!(r1.len(), 2);
+        assert!(r1.iter().all(|c| c.url.contains("a.com")));
+
+        let r2 = s.ranked(10, None, NavScope::Only("nav_2"));
+        assert_eq!(r2.len(), 1);
+        assert!(r2[0].url.contains("b.com"));
+
+        let all = s.ranked(10, None, NavScope::All);
+        assert_eq!(all.len(), 3);
+
+        // Summary scoping
+        let sum1 = s.summary(5, NavScope::Only("nav_1"));
+        assert_eq!(sum1.count, 2);
+        let sum2 = s.summary(5, NavScope::Only("nav_2"));
+        assert_eq!(sum2.count, 1);
+        // Top-K within scope: nav_2 summary should only contain nav_2's capture
+        assert!(
+            sum2.top
+                .iter()
+                .all(|c| c.navigation_id.as_deref() == Some("nav_2"))
+        );
+    }
+
+    #[test]
+    fn nav_scope_only_excludes_unbound() {
+        // Captures with no nav_id (driver-initiated fetch) shouldn't pollute
+        // an explicit Only("nav_X") query.
+        let mut s = NetworkStore::default();
+        cap(
+            &mut s,
+            "https://api.x.com/a",
+            "application/json",
+            r#"{"x":1}"#,
+        );
+        cap_nav(
+            &mut s,
+            "https://api.x.com/b",
+            "application/json",
+            r#"{"x":2}"#,
+            "nav_1",
+        );
+        let r = s.ranked(10, None, NavScope::Only("nav_1"));
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].url, "https://api.x.com/b");
     }
 }

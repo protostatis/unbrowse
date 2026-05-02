@@ -205,6 +205,13 @@ struct FetchQueue {
     sender: mpsc::Sender<FetchRequest>,
     results: Arc<Mutex<Vec<FetchResponse>>>,
     network_store: Arc<Mutex<network_store::NetworkStore>>,
+    /// nav_id of the currently-running navigate call, set by navigate_with
+    /// at start (after seed_dom) and updated each navigation. The worker
+    /// thread reads this when capturing fetches so each capture is bound
+    /// to whichever navigation was in flight when it resolved. Prevents
+    /// page A's captures from leaking into page B's summary. (PR #7
+    /// review medium.)
+    current_nav_id: Arc<Mutex<Option<String>>>,
 }
 
 fn spawn_fetch_worker(http: rquest::Client) -> FetchQueue {
@@ -214,6 +221,8 @@ fn spawn_fetch_worker(http: rquest::Client) -> FetchQueue {
     let network_store: Arc<Mutex<network_store::NetworkStore>> =
         Arc::new(Mutex::new(network_store::NetworkStore::default()));
     let store_for_thread = network_store.clone();
+    let current_nav_id: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let nav_id_for_thread = current_nav_id.clone();
 
     std::thread::Builder::new()
         .name("unbrowser-fetch".to_string())
@@ -238,11 +247,23 @@ fn spawn_fetch_worker(http: rquest::Client) -> FetchQueue {
                     // short-circuits BEFORE this worker ever sees them
                     // (synthetic 204 enqueued directly to results), so
                     // tracker bodies are never even fetched.
-                    if resp.error.is_none()
-                        && !resp.body.is_empty()
-                        && let Ok(mut s) = store_for_thread.lock()
-                    {
-                        s.maybe_capture(&url, &method, resp.status, &resp.headers, &resp.body);
+                    //
+                    // nav_id binding: read whichever navigate is currently
+                    // in flight (or the most recent one that ran) — this
+                    // gives each capture a stable navigation_id for
+                    // per-page filtering.
+                    if resp.error.is_none() && !resp.body.is_empty() {
+                        let nav_id = nav_id_for_thread.lock().ok().and_then(|g| g.clone());
+                        if let Ok(mut s) = store_for_thread.lock() {
+                            s.maybe_capture(
+                                &url,
+                                &method,
+                                resp.status,
+                                &resp.headers,
+                                &resp.body,
+                                nav_id.as_deref(),
+                            );
+                        }
                     }
                     if let Ok(mut g) = results_for_thread.lock() {
                         g.push(resp);
@@ -256,6 +277,7 @@ fn spawn_fetch_worker(http: rquest::Client) -> FetchQueue {
         sender: tx,
         results,
         network_store,
+        current_nav_id,
     }
 }
 
@@ -657,7 +679,14 @@ impl Session {
             && !body.is_empty()
             && let Ok(mut s) = self._fetch.network_store.lock()
         {
-            s.maybe_capture(&final_url, "GET", status, &headers_flat, &body);
+            s.maybe_capture(
+                &final_url,
+                "GET",
+                status,
+                &headers_flat,
+                &body,
+                Some(&nav_id),
+            );
         }
 
         let challenge = detect_challenge(status, &body);
@@ -667,6 +696,14 @@ impl Session {
 
         let tree = parse_html_to_tree(&body);
         self.seed_dom(&tree)?;
+
+        // Publish current_nav_id to the worker so any fetch that resolves
+        // during this navigate's settle loop is bound to this navigation.
+        // Set after seed_dom to match the navigation_started invariant —
+        // this nav_id is now "live" until the next navigate overwrites it.
+        if let Ok(mut g) = self._fetch.current_nav_id.lock() {
+            *g = Some(nav_id.clone());
+        }
 
         // DOM is now committed for this nav_id. From here on, the function
         // path always reaches the policy_trace emission (script branches
@@ -1121,13 +1158,13 @@ impl Session {
         // fetch/XHR responses (JSON / GraphQL / NDJSON / route data).
         // Navigate result includes a SUMMARY (count + top-K metadata)
         // — full bodies are accessed via the network_stores RPC method
-        // to keep the navigate result reasonable in size.
-        let network_stores = self
-            ._fetch
-            .network_store
-            .lock()
-            .ok()
-            .map(|s| serde_json::to_value(s.summary(5)).unwrap_or(Value::Null));
+        // to keep the navigate result reasonable in size. Scoped to THIS
+        // navigation_id so page A's captures don't leak into page B's
+        // summary. (PR #7 review medium.)
+        let network_stores = self._fetch.network_store.lock().ok().map(|s| {
+            serde_json::to_value(s.summary(5, network_store::NavScope::Only(&nav_id)))
+                .unwrap_or(Value::Null)
+        });
 
         Ok(json!({
             "navigation_id": nav_id,
@@ -2420,11 +2457,29 @@ async fn rpc_main(profile: Profile) -> Result<()> {
                     .and_then(|v| v.as_u64())
                     .unwrap_or(20) as usize;
                 let host = req.params.get("host").and_then(|v| v.as_str());
+                // nav_id default: most recent (i.e. current) navigation.
+                // "all" → no nav filter. Explicit "nav_<n>" → that one only.
+                // (PR #7 review medium: prevent stale page-A data.)
+                let nav_param = req.params.get("nav_id").and_then(|v| v.as_str());
+                let scope_id: Option<String> = match nav_param {
+                    Some("all") => None,
+                    Some(explicit) => Some(explicit.to_string()),
+                    None => session
+                        ._fetch
+                        .current_nav_id
+                        .lock()
+                        .ok()
+                        .and_then(|g| g.clone()),
+                };
+                let scope = match scope_id.as_deref() {
+                    Some(id) => network_store::NavScope::Only(id),
+                    None => network_store::NavScope::All,
+                };
                 let captures = session
                     ._fetch
                     .network_store
                     .lock()
-                    .map(|s| s.ranked(limit, host))
+                    .map(|s| s.ranked(limit, host, scope))
                     .unwrap_or_default();
                 ok_response(id, serde_json::to_value(&captures).unwrap_or(Value::Null))
             }
@@ -2638,12 +2693,13 @@ fn mcp_tools() -> Value {
         },
         {
             "name": "network_stores",
-            "description": "Return content-bearing fetch/XHR responses captured during navigate, ranked by likely content value. SPAs often keep their data in API responses (JSON, GraphQL, NDJSON, Next/Nuxt route data) that are cleaner than the rendered DOM — this tool surfaces them directly. Each entry has the URL, status, content-type, body (possibly truncated), and a heuristic score. Bodies for trackers/ads/CSS/HTML/media are NOT captured. The navigate result already contains a top-5 summary; use this tool to get more entries or filter by host.",
+            "description": "Return content-bearing fetch/XHR responses captured during navigate, ranked by likely content value. SPAs often keep their data in API responses (JSON, GraphQL, NDJSON, Next/Nuxt route data) that are cleaner than the rendered DOM — this tool surfaces them directly. Each entry has capture_id, URL, status, content-type, body_preview (truncated to 256 KB), body_bytes (full size), body_truncated flag, navigation_id, and a heuristic score. Bodies for trackers/ads/CSS/HTML/media are NOT captured. The navigate result already contains a top-5 summary scoped to that navigation; use this tool to get more entries, filter by host, or pull captures from a different navigation.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "limit": { "type": "integer", "description": "Max entries to return (default 20).", "minimum": 1, "maximum": 100 },
-                    "host":  { "type": "string", "description": "Optional substring filter on response host." }
+                    "limit":  { "type": "integer", "description": "Max entries to return (default 20).", "minimum": 1, "maximum": 100 },
+                    "host":   { "type": "string", "description": "Optional substring filter on response host." },
+                    "nav_id": { "type": "string", "description": "Defaults to the most recent navigation_id (page B never sees page A captures). Pass an explicit navigation_id from a prior navigate result to query that navigation specifically. Pass 'all' to disable nav filtering and return captures from every navigation." }
                 }
             }
         },
@@ -2749,11 +2805,26 @@ async fn dispatch_tool(session: &mut Session, name: &str, args: &Value) -> Resul
         "network_stores" => {
             let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(20) as usize;
             let host = str_arg("host");
+            let nav_param = str_arg("nav_id");
+            let scope_id: Option<String> = match nav_param {
+                Some("all") => None,
+                Some(explicit) => Some(explicit.to_string()),
+                None => session
+                    ._fetch
+                    .current_nav_id
+                    .lock()
+                    .ok()
+                    .and_then(|g| g.clone()),
+            };
+            let scope = match scope_id.as_deref() {
+                Some(id) => network_store::NavScope::Only(id),
+                None => network_store::NavScope::All,
+            };
             let captures = session
                 ._fetch
                 .network_store
                 .lock()
-                .map(|s| s.ranked(limit, host))
+                .map(|s| s.ranked(limit, host, scope))
                 .unwrap_or_default();
             Ok(serde_json::to_value(&captures).unwrap_or(Value::Null))
         }

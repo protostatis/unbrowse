@@ -97,7 +97,7 @@ def scenario_real_json_endpoint():
     captures = full.get("result", []) or []
     print(f"\nfull captures: {len(captures)}")
     for c in captures:
-        body_preview = (c.get("body") or "")[:60].replace("\n", " ")
+        body_preview = (c.get("body_preview") or "")[:60].replace("\n", " ")
         print(f"  [{c.get('kind'):>15s}] score={c.get('score')} bytes={c.get('body_bytes')}")
         print(f"                   body[:60]={body_preview!r}")
 
@@ -126,13 +126,66 @@ def scenario_spa_report_only():
     return True
 
 
+def scenario_nav_scoping():
+    """Navigate twice. Verify second navigate's summary doesn't include
+    captures from first. (PR #7 review medium.)"""
+    print("\n=== Scenario 4: per-navigation scoping ===")
+    httpd = socketserver.TCPServer(("127.0.0.1", 0), H)
+    port = httpd.server_address[1]
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{port}/api/items.json"
+
+    p = subprocess.Popen([str(BIN)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                        stderr=subprocess.DEVNULL, text=True)
+
+    nav1 = call(p, "navigate", url=base, exec_scripts=False)
+    nav1_id = nav1["result"]["navigation_id"]
+    sum1 = nav1["result"]["network_stores"]
+    print(f"nav1 ({nav1_id}): count={sum1['count']}")
+
+    # Navigate again to same endpoint — captures from nav1 should still be in
+    # the store but should NOT show up in nav2's summary.
+    nav2 = call(p, "navigate", url=base, exec_scripts=False)
+    nav2_id = nav2["result"]["navigation_id"]
+    sum2 = nav2["result"]["network_stores"]
+    print(f"nav2 ({nav2_id}): count={sum2['count']}")
+    print(f"  top entries belong to: {[t.get('navigation_id') for t in sum2.get('top', [])]}")
+
+    # nav_id explicit override: ask for nav1 captures from current session.
+    r1 = call(p, "network_stores", limit=10, nav_id=nav1_id).get("result") or []
+    r2 = call(p, "network_stores", limit=10, nav_id=nav2_id).get("result") or []
+    r_all = call(p, "network_stores", limit=10, nav_id="all").get("result") or []
+    print(f"network_stores nav_id={nav1_id}: {len(r1)} entries")
+    print(f"network_stores nav_id={nav2_id}: {len(r2)} entries")
+    print(f"network_stores nav_id=all:    {len(r_all)} entries")
+
+    call(p, "close")
+    p.communicate(timeout=2)
+    httpd.shutdown()
+
+    ok = (
+        sum1["count"] == 1
+        and sum2["count"] == 1
+        and all(t.get("navigation_id") == nav2_id for t in sum2.get("top", []))
+        and len(r1) == 1
+        and len(r2) == 1
+        and len(r_all) == 2
+        and r1[0]["navigation_id"] == nav1_id
+        and r2[0]["navigation_id"] == nav2_id
+    )
+    print("PASS — nav scoping isolates captures correctly" if ok
+          else "FAIL — nav captures leaking across navigations")
+    return ok
+
+
 def main():
     r1 = scenario_local()
     r2 = scenario_real_json_endpoint()
     scenario_spa_report_only()
+    r4 = scenario_nav_scoping()
     print()
-    print("ALL PASS" if (r1 and r2) else "FAILURES")
-    return 0 if (r1 and r2) else 1
+    print("ALL PASS" if (r1 and r2 and r4) else "FAILURES")
+    return 0 if (r1 and r2 and r4) else 1
 
 
 if __name__ == "__main__":
