@@ -778,6 +778,28 @@ impl Session {
 
         let blockmap = self.blockmap().unwrap_or(Value::Null);
 
+        // Auto-extract on SPA-shell pages. When the blockmap density says the
+        // DOM looks like an unhydrated shell (likely_js_filled=true) AND there
+        // are JSON-bearing <script> tags to pull from (json_scripts>0), run
+        // __extract() inline so the agent gets embedded data (__NEXT_DATA__,
+        // JSON-LD, json_in_script, etc.) in one round trip instead of two.
+        // Healthy pages skip the call and pay zero extra cost. The agent can
+        // still call extract() explicitly to override or pick a strategy.
+        let density = blockmap.get("density");
+        let likely_js_filled = density
+            .and_then(|d| d.get("likely_js_filled"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let json_scripts = density
+            .and_then(|d| d.get("json_scripts"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let auto_extract = if likely_js_filled && json_scripts > 0 {
+            self.extract(None).ok()
+        } else {
+            None
+        };
+
         emit_event(
             "navigate",
             json!({
@@ -788,6 +810,8 @@ impl Session {
                 "exec_scripts": exec_scripts,
                 "scripts_executed": scripts.as_ref().and_then(|s| s.get("executed")),
                 "scripts_interrupted": scripts.as_ref().and_then(|s| s.get("interrupted")),
+                "auto_extract_strategy": auto_extract.as_ref().and_then(|e| e.get("strategy")),
+                "auto_extract_confidence": auto_extract.as_ref().and_then(|e| e.get("confidence")),
             }),
         );
 
@@ -799,6 +823,7 @@ impl Session {
             "blockmap": blockmap,
             "challenge": challenge,
             "scripts": scripts,
+            "extract": auto_extract,
         }))
     }
 
@@ -1747,7 +1772,10 @@ fn parse_profile_arg(args: &[String]) -> String {
 // corpus measurement validates no extraction-quality regression. Env var
 // UNBROWSER_POLICY=blocklist also flips it on for ad-hoc shell use.
 fn parse_policy_arg(args: &[String]) -> bool {
-    if args.iter().any(|a| a == "--policy=blocklist" || a == "--policy=on") {
+    if args
+        .iter()
+        .any(|a| a == "--policy=blocklist" || a == "--policy=on")
+    {
         return true;
     }
     std::env::var("UNBROWSER_POLICY")

@@ -257,8 +257,7 @@ pub fn decide(url: &str) -> Decision {
     for (pattern, cat) in ENTRIES.iter() {
         if let Some((host_pat, path_rest)) = pattern.split_once('/') {
             // Path-bearing: require host suffix match AND path prefix match.
-            let host_matches =
-                host == host_pat || host.ends_with(&format!(".{host_pat}"));
+            let host_matches = host == host_pat || host.ends_with(&format!(".{host_pat}"));
             if !host_matches {
                 continue;
             }
@@ -288,7 +287,11 @@ mod tests {
     fn assert_blocked(url: &str, expected_category: Category) {
         let d = decide(url);
         assert!(d.blocked, "expected block for {url}, got allow");
-        assert_eq!(d.category, Some(expected_category), "wrong category for {url}");
+        assert_eq!(
+            d.category,
+            Some(expected_category),
+            "wrong category for {url}"
+        );
     }
 
     fn assert_allowed(url: &str) {
@@ -298,21 +301,36 @@ mod tests {
 
     #[test]
     fn analytics_blocked() {
-        assert_blocked("https://www.google-analytics.com/analytics.js", Category::Analytics);
-        assert_blocked("https://cdn.amplitude.com/libs/amplitude-8.21.4-min.gz.js", Category::Analytics);
+        assert_blocked(
+            "https://www.google-analytics.com/analytics.js",
+            Category::Analytics,
+        );
+        assert_blocked(
+            "https://cdn.amplitude.com/libs/amplitude-8.21.4-min.gz.js",
+            Category::Analytics,
+        );
         assert_blocked("https://api.segment.io/v1/track", Category::Analytics);
         assert_blocked("https://heap.io/", Category::Analytics);
     }
 
     #[test]
     fn tag_managers_blocked() {
-        assert_blocked("https://www.googletagmanager.com/gtm.js?id=GTM-XXXX", Category::TagManager);
-        assert_blocked("https://assets.adobedtm.com/launch-XXXX.min.js", Category::TagManager);
+        assert_blocked(
+            "https://www.googletagmanager.com/gtm.js?id=GTM-XXXX",
+            Category::TagManager,
+        );
+        assert_blocked(
+            "https://assets.adobedtm.com/launch-XXXX.min.js",
+            Category::TagManager,
+        );
     }
 
     #[test]
     fn ads_blocked() {
-        assert_blocked("https://securepubads.g.doubleclick.net/tag/js/gpt.js", Category::Ads);
+        assert_blocked(
+            "https://securepubads.g.doubleclick.net/tag/js/gpt.js",
+            Category::Ads,
+        );
         assert_blocked("https://pub.doubleverify.com/dvbm.js", Category::Ads);
         assert_blocked("https://config.aps.amazon-adsystem.com/foo", Category::Ads);
         assert_blocked("https://cdn.concert.io/lib.js", Category::Ads);
@@ -320,8 +338,14 @@ mod tests {
 
     #[test]
     fn session_replay_blocked() {
-        assert_blocked("https://static.hotjar.com/c/hotjar-1234567.js", Category::SessionReplay);
-        assert_blocked("https://cdn.logrocket.io/LogRocket.min.js", Category::SessionReplay);
+        assert_blocked(
+            "https://static.hotjar.com/c/hotjar-1234567.js",
+            Category::SessionReplay,
+        );
+        assert_blocked(
+            "https://cdn.logrocket.io/LogRocket.min.js",
+            Category::SessionReplay,
+        );
     }
 
     #[test]
@@ -333,7 +357,10 @@ mod tests {
         assert_allowed("https://example.com/?u=https://facebook.com/tr");
         assert_allowed("https://facebookishreallybad.com/tr");
         // The legitimate match still works:
-        assert_blocked("https://www.facebook.com/tr?id=12345", Category::MarketingPixel);
+        assert_blocked(
+            "https://www.facebook.com/tr?id=12345",
+            Category::MarketingPixel,
+        );
         assert_blocked("https://facebook.com/tr/abc", Category::MarketingPixel);
         // Same host, different path → allow (the path-bearing pattern is the gate):
         assert_allowed("https://www.facebook.com/some-page");
@@ -341,22 +368,43 @@ mod tests {
 
     #[test]
     fn marketing_pixels_blocked() {
-        assert_blocked("https://connect.facebook.net/en_US/fbevents.js", Category::MarketingPixel);
-        assert_blocked("https://www.facebook.com/tr?id=12345", Category::MarketingPixel);
-        assert_blocked("https://snap.licdn.com/li.lms-analytics/insight.min.js", Category::MarketingPixel);
+        assert_blocked(
+            "https://connect.facebook.net/en_US/fbevents.js",
+            Category::MarketingPixel,
+        );
+        assert_blocked(
+            "https://www.facebook.com/tr?id=12345",
+            Category::MarketingPixel,
+        );
+        assert_blocked(
+            "https://snap.licdn.com/li.lms-analytics/insight.min.js",
+            Category::MarketingPixel,
+        );
         assert_blocked("https://bat.bing.com/bat.js", Category::MarketingPixel);
     }
 
     #[test]
     fn consent_cmp_blocked() {
-        assert_blocked("https://cdn.cookielaw.org/scripttemplates/otSDKStub.js", Category::ConsentCmp);
-        assert_blocked("https://cdn.ketchjs.com/plugins/v1/tcf/stub.js", Category::ConsentCmp);
+        assert_blocked(
+            "https://cdn.cookielaw.org/scripttemplates/otSDKStub.js",
+            Category::ConsentCmp,
+        );
+        assert_blocked(
+            "https://cdn.ketchjs.com/plugins/v1/tcf/stub.js",
+            Category::ConsentCmp,
+        );
     }
 
     #[test]
     fn error_beacons_blocked() {
-        assert_blocked("https://browser.sentry-cdn.com/7.0.0/bundle.min.js", Category::ErrorBeacon);
-        assert_blocked("https://js-agent.newrelic.com/nr-1234.min.js", Category::ErrorBeacon);
+        assert_blocked(
+            "https://browser.sentry-cdn.com/7.0.0/bundle.min.js",
+            Category::ErrorBeacon,
+        );
+        assert_blocked(
+            "https://js-agent.newrelic.com/nr-1234.min.js",
+            Category::ErrorBeacon,
+        );
     }
 
     #[test]
