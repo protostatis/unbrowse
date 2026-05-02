@@ -303,6 +303,10 @@ struct Session {
     eval_deadline_ms: Arc<AtomicU64>,
     last_url: Option<String>,
     last_body: Option<String>,
+    // True when --policy=blocklist (or UNBROWSER_POLICY=blocklist) is set.
+    // Read by the external-script fetch loop in navigate_with and by the
+    // __host_fetch_send hook — see src/policy.rs.
+    policy_block: bool,
 }
 
 impl Session {
@@ -458,6 +462,7 @@ impl Session {
             eval_deadline_ms,
             last_url: None,
             last_body: None,
+            policy_block,
         })
     }
 
@@ -582,6 +587,8 @@ impl Session {
             let items = collect_scripts(&tree, &final_url);
             let mut inline_count = 0usize;
             let mut external_count = 0usize;
+            let mut async_count = 0usize;
+            let mut policy_blocked_count = 0usize;
             let mut fetch_errors: Vec<String> = Vec::new();
 
             // Spawn external fetches in parallel — current_thread runtime
@@ -590,11 +597,34 @@ impl Session {
             // sum(round-trip times). Each task has a per-fetch timeout so
             // a single huge bundle can't hang the navigate indefinitely.
             // Document ordering preserved by indexing results.
+            //
+            // Policy hook: when self.policy_block is on, decide(url) gates
+            // each external fetch BEFORE we spawn the task. Static <script
+            // src> tracker URLs (Adobe DTM, Ketch, GoogleTagServices, etc.)
+            // are caught here — they bypass __host_fetch_send because page
+            // scripts haven't run yet to issue them, so this is the
+            // structurally correct place for the gate. See src/policy.rs.
             const SCRIPT_FETCH_TIMEOUT_MS: u64 = 8000;
             let mut fetch_tasks: Vec<(usize, tokio::task::JoinHandle<Result<String, String>>)> =
                 Vec::new();
             for (idx, item) in items.iter().enumerate() {
-                if let ScriptItem::External(u) = item {
+                if let ScriptItem::External { url: u, .. } = item {
+                    if self.policy_block {
+                        let d = policy::decide(u);
+                        if d.blocked {
+                            emit_event(
+                                "policy_blocked",
+                                json!({
+                                    "url": u,
+                                    "kind": "static_script",
+                                    "category": d.category.map(|c| c.as_str()),
+                                    "matched": d.matched_pattern,
+                                }),
+                            );
+                            policy_blocked_count += 1;
+                            continue;
+                        }
+                    }
                     let url = u.clone();
                     let http = self.http.clone();
                     fetch_tasks.push((
@@ -641,23 +671,45 @@ impl Session {
                 }
             }
 
-            // Now assemble sources in document order: inline goes through
-            // unchanged, externals come from the parallel-fetch results map
-            // (skipped if their fetch failed).
-            let mut sources: Vec<String> = Vec::new();
+            // Two-pass assembly to honor `async` script semantics:
+            //   sync_sources  — Inline + External(Sync) in document order
+            //   async_sources — External(Async) in document order, executed
+            //                   AFTER the sync queue. The HTML spec lets async
+            //                   scripts execute as soon as their fetch
+            //                   completes (no order guarantee w.r.t. other
+            //                   scripts); we approximate by executing them
+            //                   last in document order, which is spec-legal
+            //                   (well-behaved async scripts can't depend on
+            //                   ordering anyway) and trivially deterministic
+            //                   for replay/measurement. Defer is folded into
+            //                   Sync — we have no incremental parsing, so
+            //                   "execute after parse in document order"
+            //                   collapses to "execute now in document order."
+            let mut sync_sources: Vec<String> = Vec::new();
+            let mut async_sources: Vec<String> = Vec::new();
             for (idx, item) in items.into_iter().enumerate() {
                 match item {
                     ScriptItem::Inline(s) => {
                         inline_count += 1;
-                        sources.push(s);
+                        sync_sources.push(s);
                     }
-                    ScriptItem::External(_) => {
+                    ScriptItem::External { kind, .. } => {
                         if let Some(body) = external_results.remove(&idx) {
-                            sources.push(body);
+                            match kind {
+                                ScriptKind::Sync => sync_sources.push(body),
+                                ScriptKind::Async => {
+                                    async_count += 1;
+                                    async_sources.push(body);
+                                }
+                            }
                         }
                     }
                 }
             }
+            let sources: Vec<String> = sync_sources
+                .into_iter()
+                .chain(async_sources.into_iter())
+                .collect();
             // Eval all in document order. Page scripts often end with an
             // Element-returning expression (circular refs → JSON.stringify
             // throws), so use eval_void.
@@ -706,6 +758,8 @@ impl Session {
             Some(json!({
                 "inline_count": inline_count,
                 "external_count": external_count,
+                "async_count": async_count,
+                "policy_blocked": policy_blocked_count,
                 "executed": executed,
                 "interrupted": interrupted,
                 "errors_count": eval_errors.len(),
@@ -1435,11 +1489,27 @@ fn detect_challenge(status: u16, body: &str) -> Option<Value> {
     })
 }
 
-// One <script> element from a parsed page — either an inline body or an
-// external src= URL (resolved against the page URL).
+// One <script> element from a parsed page.
+//
+// `kind` distinguishes async from non-async. Inline and Defer are treated as
+// Sync for execution because we don't have incremental HTML parsing — by the
+// time scripts run, the document is fully parsed, so "execute after parse in
+// document order" (Defer's spec semantics) and "execute now in document order"
+// (Sync) collapse to the same thing for us. Only `async` differs: async
+// scripts may execute out of document order (we run them after the sync
+// queue, in fetch-completion order).
+//
+// Inline scripts cannot be async (browsers ignore the attribute on inline),
+// so we don't track kind for Inline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScriptKind {
+    Sync,
+    Async,
+}
+
 enum ScriptItem {
     Inline(String),
-    External(String),
+    External { url: String, kind: ScriptKind },
 }
 
 // Walk the parsed HTML tree and collect <script> elements in document order.
@@ -1477,7 +1547,19 @@ fn walk_for_scripts(node: &Value, base: Option<&url::Url>, out: &mut Vec<ScriptI
                     && let Some(b) = base
                     && let Ok(resolved) = b.join(src_url)
                 {
-                    out.push(ScriptItem::External(resolved.to_string()));
+                    // HTML treats `async` and `defer` as boolean attrs — any
+                    // presence (even empty value) counts. `async` wins if both
+                    // are set, matching browsers.
+                    let is_async = attrs.and_then(|a| a.get("async")).is_some();
+                    let kind = if is_async {
+                        ScriptKind::Async
+                    } else {
+                        ScriptKind::Sync
+                    };
+                    out.push(ScriptItem::External {
+                        url: resolved.to_string(),
+                        kind,
+                    });
                 }
             } else if let Some(children) = obj.get("children").and_then(|c| c.as_array()) {
                 let mut content = String::new();
@@ -1920,12 +2002,12 @@ fn mcp_tools() -> Value {
     json!([
         {
             "name": "navigate",
-            "description": "Fetch a URL with Chrome-fingerprinted HTTP (rquest, Chrome 131 emulation). Parses HTML, seeds the JS DOM, returns BlockMap inline. With `exec_scripts: true`, also extracts inline <script> tags from the parsed HTML, eval's them in QuickJS (with shims for setTimeout/fetch/etc.), then settles the event loop and fires DOMContentLoaded + load. Returns a `scripts` summary with executed/errors when exec_scripts is true.",
+            "description": "Fetch a URL with Chrome-fingerprinted HTTP (rquest, Chrome 131 emulation). Parses HTML, seeds the JS DOM, returns BlockMap inline. With `exec_scripts: true`, extracts inline AND external <script> tags from the parsed HTML, fetches externals in parallel (8s per-fetch timeout), eval's them in document order in QuickJS (with shims for setTimeout/fetch/etc.), then settles the event loop and fires DOMContentLoaded + load. `<script async>` is honored: async scripts execute after the sync queue. When `--policy=blocklist` is set, tracker URLs are blocked at script-fetch time (see scripts.policy_blocked in the result). Returns a `scripts` summary with inline_count, external_count, async_count, policy_blocked, executed, errors.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "url":          { "type": "string", "description": "Absolute URL to fetch" },
-                    "exec_scripts": { "type": "boolean", "description": "Execute inline <script> tags after parse (default false). External src=URL scripts are NOT loaded yet." }
+                    "exec_scripts": { "type": "boolean", "description": "Run page <script> tags (inline + external src) after parse, settle the event loop, and fire DOMContentLoaded + load. Default false." }
                 },
                 "required": ["url"]
             }

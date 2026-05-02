@@ -223,16 +223,28 @@ fn exact_set() -> &'static HashSet<&'static str> {
 
 /// Decide whether to block a URL. Returns Decision with category + matched
 /// pattern when blocked.
+///
+/// Match algorithm:
+///   1. Parse URL, extract lowercased host. URLs without host (data:, javascript:,
+///      malformed) → allow.
+///   2. Path-free patterns (e.g. `google-analytics.com`) match if host equals
+///      the pattern or ends with `.{pattern}`. Exact match short-circuited via
+///      a HashSet lookup.
+///   3. Path-bearing patterns (e.g. `facebook.com/tr`) match only when the
+///      *host* matches AND the URL path starts with the pattern's path.
+///      This rejects `notfacebook.com/tr` and `?u=https://facebook.com/tr` —
+///      both of which a naive `url.contains(pattern)` would falsely block.
 pub fn decide(url: &str) -> Decision {
-    let host = match url::Url::parse(url) {
-        Ok(u) => u.host_str().map(|s| s.to_lowercase()),
-        Err(_) => None,
+    let parsed = match url::Url::parse(url) {
+        Ok(u) => u,
+        Err(_) => return Decision::allow(),
     };
-    let Some(host) = host else {
+    let Some(host) = parsed.host_str().map(|s| s.to_lowercase()) else {
         return Decision::allow();
     };
+    let path = parsed.path();
 
-    // Fast path: exact match.
+    // Fast path: exact host match (path-free patterns only).
     if let Some(&pattern) = exact_set().get(host.as_str()) {
         let cat = ENTRIES
             .iter()
@@ -242,11 +254,16 @@ pub fn decide(url: &str) -> Decision {
         return Decision::block(cat, pattern);
     }
 
-    // Suffix walk: host ends with `.{pattern}`.
     for (pattern, cat) in ENTRIES.iter() {
-        if pattern.contains('/') {
-            // Patterns like "facebook.com/tr" are path-bearing; check separately.
-            if url.contains(pattern) {
+        if let Some((host_pat, path_rest)) = pattern.split_once('/') {
+            // Path-bearing: require host suffix match AND path prefix match.
+            let host_matches =
+                host == host_pat || host.ends_with(&format!(".{host_pat}"));
+            if !host_matches {
+                continue;
+            }
+            let path_pat = format!("/{path_rest}");
+            if path.starts_with(&path_pat) {
                 return Decision::block(*cat, pattern);
             }
             continue;
@@ -305,6 +322,21 @@ mod tests {
     fn session_replay_blocked() {
         assert_blocked("https://static.hotjar.com/c/hotjar-1234567.js", Category::SessionReplay);
         assert_blocked("https://cdn.logrocket.io/LogRocket.min.js", Category::SessionReplay);
+    }
+
+    #[test]
+    fn path_bearing_pattern_no_overmatch() {
+        // Reviewer flag: `facebook.com/tr` was blocking `notfacebook.com/tr`
+        // and `example.com/?u=https://facebook.com/tr` because the matcher
+        // used `url.contains(pattern)`. Lock the fix in.
+        assert_allowed("https://notfacebook.com/tr");
+        assert_allowed("https://example.com/?u=https://facebook.com/tr");
+        assert_allowed("https://facebookishreallybad.com/tr");
+        // The legitimate match still works:
+        assert_blocked("https://www.facebook.com/tr?id=12345", Category::MarketingPixel);
+        assert_blocked("https://facebook.com/tr/abc", Category::MarketingPixel);
+        // Same host, different path → allow (the path-bearing pattern is the gate):
+        assert_allowed("https://www.facebook.com/some-page");
     }
 
     #[test]
