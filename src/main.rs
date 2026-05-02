@@ -1211,6 +1211,10 @@ fn detect_challenge(status: u16, body: &str) -> Option<Value> {
             &[
                 "just a moment",
                 "checking your browser",
+                // Newer wording (post-2024 Turnstile/managed challenge):
+                "verifying you are human",
+                "needs to review the security of your connection",
+                "performance & security by cloudflare",
                 "cf-challenge",
                 "cf_challenge",
                 "turnstile",
@@ -1319,11 +1323,15 @@ fn detect_challenge(status: u16, body: &str) -> Option<Value> {
             &[
                 "verify you are human",
                 "verify that you are human",
+                "verify that you're human",
+                "please wait for verification",
+                "please wait while we verify",
                 "unusual traffic",
                 "access to this page has been denied",
                 "access denied",
                 "automated requests",
                 "sorry, you have been blocked",
+                "you are being rate limited",
             ],
             "",
         ),
