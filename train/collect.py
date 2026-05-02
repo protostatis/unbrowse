@@ -87,13 +87,24 @@ def load_corpus(path: Path) -> list[str]:
 
 
 class Driver:
-    """One unbrowser subprocess; sends RPC, returns parsed responses."""
-    def __init__(self, flags: list[str]):
+    """One unbrowser subprocess; sends RPC, returns parsed responses.
+
+    Stderr is redirected to `events_path` at process spawn so the stderr
+    pipe buffer can never fill and deadlock the parent on stdout.read.
+    Previous implementation kept stderr as PIPE and drained after close —
+    a noisy SPA emitting many script_decision/script_executed events
+    could fill the OS pipe buffer (~64 KB) before the binary wrote its
+    JSON-RPC response, blocking the child on stderr write while the
+    parent blocked on stdout read. (PR #5 review HIGH.)
+    """
+    def __init__(self, flags: list[str], events_path: Path):
         env = dict(os.environ)
         env["UNBROWSER_TIMEOUT_MS"] = str(DISPATCH_BUDGET_MS)
+        self._events_file = open(events_path, "w")
         self.p = subprocess.Popen(
             [str(BIN)] + flags,
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=self._events_file,
             text=True, env=env,
         )
         self._id = 0
@@ -108,17 +119,25 @@ class Driver:
             raise RuntimeError("empty response — binary likely crashed")
         return json.loads(line)
 
-    def close_and_drain(self) -> str:
+    def close(self) -> None:
+        """Send `close` RPC, wait for binary to exit, close events file.
+
+        No stderr drain needed — events were streamed directly to file.
+        """
         try:
             self.call("close")
         except Exception:
             pass
         try:
-            _, stderr = self.p.communicate(timeout=3)
+            self.p.wait(timeout=3)
         except subprocess.TimeoutExpired:
             self.p.kill()
-            _, stderr = self.p.communicate()
-        return stderr or ""
+            self.p.wait()
+        try:
+            self._events_file.flush()
+            self._events_file.close()
+        except Exception:
+            pass
 
 
 def run_cell(url: str, task_name: str, policy_name: str, repeat: int,
@@ -127,7 +146,8 @@ def run_cell(url: str, task_name: str, policy_name: str, repeat: int,
     task = TASK_DEFS[task_name]
     policy = POLICY_CONFIGS[policy_name]
 
-    drv = Driver(flags=policy["flags"])
+    events_path = out_dir / f"{task_name}_{policy_name}_{repeat}.events.jsonl"
+    drv = Driver(flags=policy["flags"], events_path=events_path)
     summary = {
         "url": url,
         "task": task_name,
@@ -172,11 +192,13 @@ def run_cell(url: str, task_name: str, policy_name: str, repeat: int,
     except Exception as e:
         summary["error"] = str(e)
     finally:
-        stderr = drv.close_and_drain()
-        events_path = out_dir / f"{task_name}_{policy_name}_{repeat}.events.jsonl"
-        # Stderr already comes as one NDJSON event per line; just persist.
-        events_path.write_text(stderr)
-        summary["events_lines"] = sum(1 for _ in stderr.splitlines() if _.strip())
+        drv.close()
+        # Stderr was streamed directly to events_path; count lines for summary.
+        try:
+            with open(events_path) as f:
+                summary["events_lines"] = sum(1 for line in f if line.strip())
+        except OSError:
+            summary["events_lines"] = 0
 
     return summary
 
