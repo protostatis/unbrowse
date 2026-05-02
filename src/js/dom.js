@@ -198,27 +198,31 @@
   Node.prototype = Object.create(EventTarget.prototype);
   Node.prototype.constructor = Node;
 
-  // Lightweight URL resolver — QuickJS has no native URL constructor.
-  // Handles the cases we actually see in dynamic script src:
-  //   absolute        : http(s)://host/path → returned as-is
-  //   protocol-rel    : //host/path → base.protocol + src
-  //   root-relative   : /path → base.origin + src
-  //   path-relative   : foo/bar → base.origin + base.dir + src
-  //   data:/blob:/etc : passed through unchanged (host layer rejects)
+  // URL resolver. QuickJS has no native URL constructor, so we delegate to
+  // Rust's url::Url::join via the __host_resolve_url host function (fully
+  // spec-compliant: handles ../, ./, query-only, fragment-only, scheme-
+  // relative, base normalization). The JS-side fallback below is kept only
+  // as a safety net for environments that haven't installed the host fn —
+  // it covers the simple cases (absolute, protocol-relative, root-relative,
+  // simple path-relative) but does NOT handle ../, ./ or <base>. Reviewer
+  // PR #6 medium: dynamic chunks commonly depend on correct base behavior.
   function __resolveURL(src, baseHref) {
     if (!src) return src;
-    if (/^(?:[a-z][a-z0-9+.-]*:)?\/\//i.test(src) && /^[a-z]/i.test(src)) return src;
-    if (/^[a-z][a-z0-9+.-]*:/i.test(src)) return src; // data:, blob:, javascript:, etc.
+    if (typeof __host_resolve_url === 'function') {
+      try {
+        var r = __host_resolve_url(src, baseHref || '');
+        if (r) return r;
+      } catch (e) { /* fall through to JS fallback */ }
+    }
+    // ---- JS-side fallback (limited) ----
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(src)) return src;          // absolute
+    if (/^[a-z][a-z0-9+.-]*:/i.test(src)) return src;              // data:, blob:, etc.
     var m = baseHref.match(/^(https?):\/\/([^\/]+)(\/[^?#]*)?/i);
     if (!m) return src;
     var origin = m[1] + '://' + m[2];
     var path = m[3] || '/';
-    if (src.indexOf('//') === 0) {
-      return m[1] + ':' + src;
-    }
-    if (src.charAt(0) === '/') {
-      return origin + src;
-    }
+    if (src.indexOf('//') === 0) return m[1] + ':' + src;
+    if (src.charAt(0) === '/') return origin + src;
     var dir = path.substring(0, path.lastIndexOf('/') + 1);
     return origin + dir + src;
   }
@@ -281,20 +285,40 @@
         var status = resp.status;
         if (status >= 200 && status < 300 && status !== 204) {
           return resp.text().then(function(code) {
+            // Try to evaluate. If eval throws (genuine syntax/runtime error,
+            // OR ESM `import` syntax — type="module" is not actually
+            // module-loaded; we evaluate it as classic script and surface
+            // the failure), dispatch `error` so the page's onerror handler
+            // sees it. This was previously swallowed and `load` fired
+            // unconditionally, hiding real bugs and silently breaking ESM-
+            // only chunks. (PR #6 review HIGH.)
+            var evalOk = true;
+            var evalErr = null;
             if (code) {
-              // Page-script errors must not reach our settle loop. Failures
-              // here are recorded only by the host's policy_blocked /
-              // script_executed events (or absence thereof).
-              try { (0, eval)(code); } catch (e) {}
+              try { (0, eval)(code); }
+              catch (e) { evalOk = false; evalErr = e; }
             }
-            child.dispatchEvent(new Event('load'));
+            if (evalOk) {
+              child.dispatchEvent(new Event('load'));
+            } else {
+              // Surface eval failure to the page (matches browser behavior
+              // for parse errors in fetched scripts) and to NDJSON via the
+              // window error handler if any. Do not swallow.
+              try {
+                if (typeof globalThis.__unb_dyn_script_error === 'function') {
+                  globalThis.__unb_dyn_script_error(url, String(evalErr && (evalErr.message || evalErr)));
+                }
+              } catch (_e) {}
+              child.dispatchEvent(new Event('error'));
+            }
           });
         } else if (status === 204) {
           // Synthetic 204 from the policy hook (or genuine 204 from server).
           // Fire load so the page's onload chain proceeds — this is the
           // "stub_success" pattern. Block the actual code execution while
           // keeping the load callback chain intact, so app boot doesn't
-          // stall on a tag-manager-ready callback.
+          // stall on a tag-manager-ready callback. The "no eval = success"
+          // here is the policy decision, not a missing fetch.
           child.dispatchEvent(new Event('load'));
         } else {
           child.dispatchEvent(new Event('error'));

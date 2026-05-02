@@ -469,6 +469,27 @@ impl Session {
                 .set("__host_drain_fetches", host_drain)
                 .map_err(|e| anyhow!("set __host_drain_fetches: {e}"))?;
 
+            // __host_resolve_url(src, base) — delegates to Rust's url::Url::join,
+            // which is fully spec-compliant (handles ../, ./, query-only,
+            // fragment-only, scheme-relative). Used by dom.js's dynamic-script
+            // loader so dynamic chunks resolve correctly. (PR #6 review medium.)
+            // Returns the input src on parse failure — caller decides whether
+            // to fall back to the JS-side regex resolver.
+            let host_resolve_url =
+                rquickjs::Function::new(ctx.clone(), |src: String, base: String| -> String {
+                    if src.is_empty() {
+                        return src;
+                    }
+                    match url::Url::parse(&base) {
+                        Ok(b) => b.join(&src).map(|u| u.to_string()).unwrap_or(src),
+                        Err(_) => src,
+                    }
+                })
+                .map_err(|e| anyhow!("install __host_resolve_url: {e}"))?;
+            ctx.globals()
+                .set("__host_resolve_url", host_resolve_url)
+                .map_err(|e| anyhow!("set __host_resolve_url: {e}"))?;
+
             Ok(())
         })?;
         Ok(Self {

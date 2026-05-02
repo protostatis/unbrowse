@@ -20,34 +20,43 @@ REPO = Path(__file__).resolve().parents[1]
 BIN = REPO / "target" / "release" / "unbrowser"
 
 # --- Local synthetic test page ---
+# Phases:
+#   1. first-party JS at /sub/page.html → fetched via relative `../js/first.js`
+#      (tests __host_resolve_url handling of `../` segments)
+#   2. blocked tracker (Google Analytics) — must STILL fire load (stub_success)
+#   3. broken script that throws at eval — must fire ERROR (not load) — PR #6
+#      review HIGH: previously swallowed eval errors and fired load.
 HTML = """<!DOCTYPE html>
 <html><head><title>dyn</title></head>
 <body><div id="boot-status">starting</div>
 <script>
-  // Phase 1: dynamically insert a first-party script that sets a global
-  // and then signals via onload.
+  function setStatus(s) { document.getElementById('boot-status').textContent = s; }
+  function appendStatus(s) { setStatus(document.getElementById('boot-status').textContent + s); }
+
+  // Phase 1: dynamically insert a first-party script. Use a relative path
+  // with `../` to exercise URL resolution.
   var s = document.createElement('script');
-  s.src = '/dyn_first_party.js';
+  s.src = '../js/first.js';
   s.onload = function() {
-    document.getElementById('boot-status').textContent =
-      'first_party_loaded:' + (typeof window.__dyn_first_party);
-    // Phase 2: now insert a tracker URL (will be blocked by policy);
-    // verify load STILL fires (stub_success behavior).
+    setStatus('first_party_loaded:' + (typeof window.__dyn_first_party));
+
+    // Phase 2: blocked tracker. Load should fire (stub_success).
     var t = document.createElement('script');
     t.src = 'https://www.google-analytics.com/analytics.js';
     t.onload = function() {
-      document.getElementById('boot-status').textContent =
-        document.getElementById('boot-status').textContent + '|tracker_load_fired';
+      appendStatus('|tracker_load_fired');
+
+      // Phase 3: a script that throws on eval. Error MUST fire (not load).
+      var b = document.createElement('script');
+      b.src = '/broken.js';
+      b.onload = function() { appendStatus('|broken_load_BUG'); };
+      b.onerror = function() { appendStatus('|broken_error_fired'); };
+      document.head.appendChild(b);
     };
-    t.onerror = function() {
-      document.getElementById('boot-status').textContent =
-        document.getElementById('boot-status').textContent + '|tracker_error';
-    };
+    t.onerror = function() { appendStatus('|tracker_error'); };
     document.head.appendChild(t);
   };
-  s.onerror = function() {
-    document.getElementById('boot-status').textContent = 'first_party_error';
-  };
+  s.onerror = function() { setStatus('first_party_error'); };
   document.head.appendChild(s);
 </script>
 </body></html>
@@ -57,18 +66,32 @@ DYN_FIRST_PARTY_JS = """
 window.__dyn_first_party = 'set_at_' + Date.now();
 """
 
+DYN_BROKEN_JS = """
+// Throws at eval — should cause the dynamic-script handler to dispatch error.
+throw new Error('intentional eval failure');
+"""
+
 
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
-        if self.path == "/" or self.path == "/index.html":
+        # HTML lives at /sub/page.html so the in-page `../js/first.js`
+        # exercises real ../ resolution against base /sub/page.html.
+        if self.path in ("/", "/sub/page.html"):
             body = HTML.encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
-        elif self.path == "/dyn_first_party.js":
+        elif self.path == "/js/first.js":
             body = DYN_FIRST_PARTY_JS.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/javascript")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        elif self.path == "/broken.js":
+            body = DYN_BROKEN_JS.encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/javascript")
             self.send_header("Content-Length", str(len(body)))
@@ -91,8 +114,8 @@ def serve():
 
 def main():
     httpd, port = serve()
-    base = f"http://127.0.0.1:{port}/"
-    print(f"server: {base}")
+    base = f"http://127.0.0.1:{port}/sub/page.html"
+    print(f"server target: {base}")
 
     p = subprocess.Popen(
         [str(BIN), "--policy=blocklist"],
@@ -156,6 +179,14 @@ def main():
         ok = False
     else:
         print("PASS: tracker URL was blocked by policy")
+    if "broken_load_BUG" in boot_status:
+        print(f"FAIL: broken script (eval throws) fired LOAD instead of ERROR")
+        ok = False
+    elif "broken_error_fired" not in boot_status:
+        print(f"FAIL: broken script did not dispatch error (boot stalled or never reached phase 3)")
+        ok = False
+    else:
+        print("PASS: eval-failing script correctly dispatched ERROR (not load)")
 
     print()
     print("ALL PASS" if ok else "FAILURES")
