@@ -706,10 +706,7 @@ impl Session {
                     }
                 }
             }
-            let sources: Vec<String> = sync_sources
-                .into_iter()
-                .chain(async_sources.into_iter())
-                .collect();
+            let sources: Vec<String> = sync_sources.into_iter().chain(async_sources).collect();
             // Eval all in document order. Page scripts often end with an
             // Element-returning expression (circular refs → JSON.stringify
             // throws), so use eval_void.
@@ -2030,7 +2027,7 @@ fn mcp_tools() -> Value {
     json!([
         {
             "name": "navigate",
-            "description": "Fetch a URL with Chrome-fingerprinted HTTP (rquest, Chrome 131 emulation). Parses HTML, seeds the JS DOM, returns BlockMap inline. With `exec_scripts: true`, extracts inline AND external <script> tags from the parsed HTML, fetches externals in parallel (8s per-fetch timeout), eval's them in document order in QuickJS (with shims for setTimeout/fetch/etc.), then settles the event loop and fires DOMContentLoaded + load. `<script async>` is honored: async scripts execute after the sync queue. When `--policy=blocklist` is set, tracker URLs are blocked at script-fetch time (see scripts.policy_blocked in the result). Returns a `scripts` summary with inline_count, external_count, async_count, policy_blocked, executed, errors.",
+            "description": "Fetch a URL with Chrome-fingerprinted HTTP (rquest, Chrome 131 emulation). Parses HTML, seeds the JS DOM, returns BlockMap inline. With `exec_scripts: true`, extracts inline AND external <script> tags from the parsed HTML, fetches externals in parallel (8s per-fetch timeout), eval's them in document order in QuickJS (with shims for setTimeout/fetch/etc.), then settles the event loop and fires DOMContentLoaded + load. `<script async>` is honored: async scripts execute after the sync queue. When `--policy=blocklist` is set, tracker URLs are blocked at script-fetch time (see scripts.policy_blocked in the result). Returns a `scripts` summary with inline_count, external_count, async_count, policy_blocked, executed, errors.\n\nSPA-shell auto-extract: the BlockMap's `density.likely_js_filled` flags pages that look like an unhydrated shell (empty tables/lists, thin top-level structure, framework chrome but no rendered content). When that's true AND `density.json_scripts > 0` (page embeds data in <script type=application/json | application/ld+json | text/x-magento-init | ...>), navigate auto-runs `extract()` and returns the result as the `extract` field — collapsing the see-shell-then-extract two-step into one round trip on Next.js / Magento / Shopify / JSON-LD pages where the data the JS would have rendered is already sitting in the HTML. On healthy pages `extract` is null and there is no extra cost.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
