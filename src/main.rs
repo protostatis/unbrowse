@@ -1061,12 +1061,84 @@ impl Session {
                         // Tier-1 list but ARE in this domain's known-tracker
                         // set are also skipped. Reason recorded as
                         // "prefit_blocklist" so drivers can distinguish.
+                        //
+                        // Bayesian gate (R2 / decide()): when we have a
+                        // posterior for `block:<host>` on this domain, draw
+                        // a Thompson sample and gate the block on
+                        // `sample >= threshold`. With a high-confidence
+                        // posterior (lots of "blocked & succeeded" evidence)
+                        // we block aggressively; with Beta(1, 1)
+                        // placeholders we coin-flip; with strong evidence
+                        // *against* blocking we let the script through.
+                        // No posterior → fall through to the deterministic
+                        // block (preserves prior behavior on un-trained
+                        // entries). Threshold defaults to 0.5 — the natural
+                        // Bayesian decision boundary, see prefit::decide.
                         if let (Some(bundle), Some(p)) = (self.prefit.as_ref(), prefit_for_domain)
                             && bundle.matches_blocklist_addition(p, u)
                         {
-                            emit_event(
-                                "script_decision",
-                                json!({
+                            let decision_key = format!("block:{host}");
+                            const THRESHOLD: f64 = 0.5;
+                            // Minimum observation count before we'll
+                            // trust a posterior to override the
+                            // deterministic block. Tier-1.5 prefit
+                            // entries ship with `Beta(1, 1) / n=0`
+                            // placeholders ("we know about this
+                            // domain, no data yet") — sampling those
+                            // gives a uniform draw and would let
+                            // ~50% of hand-curated tracker hits
+                            // through. Bias is "deterministic until
+                            // evidence flips it": only consult once
+                            // we've seen ≥5 trials, which is the
+                            // smallest n where a Beta posterior's
+                            // 95% credible interval is meaningfully
+                            // narrower than the prior.
+                            const MIN_POSTERIOR_OBSERVATIONS: u64 = 5;
+                            // Default to the deterministic block when no
+                            // posterior exists OR when the posterior
+                            // is too thin to be informative
+                            // (preserves prior behavior on un-trained
+                            // entries). When a posterior IS present
+                            // and well-observed, use Thompson sampling
+                            // via `decide_traced` so the gate is informed.
+                            let post_opt = bundle.lookup_posterior(&p.domain, &decision_key);
+                            let has_useful_posterior = post_opt
+                                .as_ref()
+                                .map(|p| p.n >= MIN_POSTERIOR_OBSERVATIONS)
+                                .unwrap_or(false);
+                            let (block_now, outcome) = if has_useful_posterior {
+                                let mut rng = rand::thread_rng();
+                                let out = bundle.decide_traced(
+                                    &mut rng,
+                                    &p.domain,
+                                    &decision_key,
+                                    THRESHOLD,
+                                );
+                                (out.blocked, Some(out))
+                            } else {
+                                (true, None)
+                            };
+                            if let Some(out) = outcome
+                                && let (Some(post), Some(s)) = (out.posterior, out.sampled)
+                            {
+                                emit_event(
+                                    "posterior_consulted",
+                                    json!({
+                                        "schema_version": 1,
+                                        "navigation_id": nav_id,
+                                        "decision_key": decision_key,
+                                        "domain": p.domain,
+                                        "alpha": post.alpha,
+                                        "beta": post.beta,
+                                        "n": post.n,
+                                        "sampled": s,
+                                        "threshold": THRESHOLD,
+                                        "blocked": block_now,
+                                    }),
+                                );
+                            }
+                            if block_now {
+                                let mut decision = json!({
                                     "schema_version": 1,
                                     "navigation_id": nav_id,
                                     "script_id": idx,
@@ -1076,11 +1148,27 @@ impl Session {
                                     "action": "skip",
                                     "reason": "prefit_blocklist",
                                     "domain": p.domain,
-                                }),
-                            );
-                            policy_blocked_count += 1;
-                            skipped_ids.insert(idx);
-                            continue;
+                                });
+                                // When we consulted a posterior, attach it
+                                // so script_decision rows are self-contained
+                                // for downstream credit assignment.
+                                if let Some(out) = outcome
+                                    && let (Some(post), Some(s)) = (out.posterior, out.sampled)
+                                {
+                                    decision["posterior_alpha"] = json!(post.alpha);
+                                    decision["posterior_beta"] = json!(post.beta);
+                                    decision["posterior_n"] = json!(post.n);
+                                    decision["posterior_sampled"] = json!(s);
+                                }
+                                emit_event("script_decision", decision);
+                                policy_blocked_count += 1;
+                                skipped_ids.insert(idx);
+                                continue;
+                            }
+                            // Posterior gated us out of blocking — let the
+                            // script through. We DON'T emit a script_decision
+                            // here (the action will be "queued" — emitted
+                            // implicitly by the fetch path below).
                         }
                     }
                     let url = u.clone();
