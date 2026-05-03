@@ -39,8 +39,11 @@ jobs:
                                  # Rosetta on the arm64 runner.
             wheel_platform: macosx_10_12_x86_64
           - target: x86_64-unknown-linux-gnu
-            os: ubuntu-22.04     # pin: glibc 2.35 == manylinux_2_35
-            wheel_platform: manylinux_2_35_x86_64
+            os: ubuntu-20.04     # pin: glibc 2.31 — runs on AL2023 (2.34) and Ubuntu 20.04+
+            wheel_platform: manylinux_2_31_x86_64
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-22.04-arm  # GitHub native ARM64 runner — covers Graviton2/3/4
+            wheel_platform: manylinux_2_35_aarch64
 
     steps:
       - uses: actions/checkout@v4
@@ -243,7 +246,8 @@ jobs:
             |---|---|
             | macOS Apple Silicon | `unbrowser-aarch64-apple-darwin.tar.gz` |
             | macOS Intel | `unbrowser-x86_64-apple-darwin.tar.gz` |
-            | Linux x86_64 (glibc) | `unbrowser-x86_64-unknown-linux-gnu.tar.gz` |
+            | Linux x86_64 — EC2, Ubuntu 20.04+, AL2023 | `unbrowser-x86_64-unknown-linux-gnu.tar.gz` |
+            | Linux arm64 — Graviton2/3/4, Ubuntu 22.04+ | `unbrowser-aarch64-unknown-linux-gnu.tar.gz` |
 
             ### One-liner (macOS / Linux):
 
