@@ -16,10 +16,11 @@ import json
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 BIN = os.environ.get(
     "UNBROWSER_BIN",
-    "~/Projects/unchained_browser/target/debug/unbrowser",
+    str(Path(__file__).parent.parent / "target/debug/unbrowser"),
 )
 
 # Loose Chrome family checks. JA3/JA4 hashes drift across releases — we

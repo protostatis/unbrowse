@@ -24,7 +24,7 @@ from typing import Optional
 NAV_TIMEOUT_S = 30  # per-navigate budget; bigger than CNBC's worst case
 
 BEFORE_BIN = Path("/tmp/unbrowser-before/target/release/unbrowser")
-AFTER_BIN = Path("~/Projects/unchained_browser/target/release/unbrowser")
+AFTER_BIN = Path(__file__).parent.parent / "target/release/unbrowser"
 
 SITES = [
     # Prefit-bundle domains — verify each entry fires.
