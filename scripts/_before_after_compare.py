@@ -27,11 +27,23 @@ BEFORE_BIN = Path("/tmp/unbrowser-before/target/release/unbrowser")
 AFTER_BIN = Path("/Users/zhiminzou/Projects/unchained_browser/target/release/unbrowser")
 
 SITES = [
+    # Prefit-bundle domains — verify each entry fires.
     ("https://news.ycombinator.com/", "HN"),
     ("https://en.wikipedia.org/wiki/Bayesian_inference", "Wikipedia"),
     ("https://www.cnbc.com/markets/", "CNBC"),
     ("https://www.npmjs.com/package/react", "npm"),
     ("https://github.com/anthropics/anthropic-sdk-python", "GitHub"),
+    ("https://www.reddit.com/r/programming/", "Reddit"),
+    ("https://www.youtube.com/feed/trending", "YouTube"),
+    ("https://polymarket.com/", "Polymarket"),
+    ("https://kalshi.com/markets", "Kalshi"),
+    ("https://www.zillow.com/homes/for_rent/", "Zillow"),
+    # Off-bundle — exercise the framework_priors fallback path.
+    ("https://arxiv.org/abs/2104.13478", "arxiv"),
+    ("https://www.nytimes.com/", "NYT"),
+    ("https://www.theverge.com/", "Verge"),
+    ("https://stackoverflow.com/questions/11227809/why-is-processing-a-sorted-array-faster-than-processing-an-unsorted-array", "StackOverflow"),
+    ("https://medium.com/", "Medium"),
 ]
 
 
