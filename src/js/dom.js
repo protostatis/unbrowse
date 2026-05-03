@@ -642,20 +642,91 @@
     }
   });
 
+  // Parse an HTML fragment string into a tree we can buildChildren() into.
+  // Delegates to the Rust host function __host_parse_html_fragment which
+  // returns a JSON-encoded tree (string). We JSON.parse here. Returns
+  // null on any failure — caller should treat as "fragment is empty".
+  // Used by Element.innerHTML setter and insertAdjacentHTML().
+  function __parseFragment(html) {
+    if (!html) return null;
+    if (typeof __host_parse_html_fragment !== 'function') return null;
+    try {
+      var raw = __host_parse_html_fragment(String(html));
+      if (!raw) return null;
+      return JSON.parse(raw);
+    } catch (e) {
+      return null;
+    }
+  }
+
   Object.defineProperty(Element.prototype, 'innerHTML', {
     get: function() {
       return serializeChildren(this);
     },
     set: function(html) {
+      // Detach existing children from the registry too — buildChildren
+      // bypasses Node constructors, so the new ones won't be registered
+      // unless we use the appendChild path. For now we accept that
+      // observers see one big setInnerHTML mutation (recorded below)
+      // rather than per-node addedNodes/removedNodes; subtree-walking
+      // for fine-grained mutation records is a follow-up.
       this.childNodes = [];
       recordMutation({ type: 'setInnerHTML', id: this._id, html: html });
-      // Parse HTML and build nodes using host-provided parser
-      if (html && typeof __parseHTMLFragment === 'function') {
-        var tree = __parseHTMLFragment(html);
-        buildChildren(this, tree);
-      }
+      var tree = __parseFragment(html);
+      if (tree) buildChildren(this, tree);
     }
   });
+
+  // insertAdjacentHTML(position, html) — parse fragment and insert at one
+  // of four positions relative to `this`. Spec-defined positions:
+  //   beforebegin: before `this` itself (sibling, before)
+  //   afterbegin:  inside `this`, before first child
+  //   beforeend:   inside `this`, after last child
+  //   afterend:    after `this` itself (sibling, after)
+  // Throws on invalid position (browsers throw SyntaxError).
+  Element.prototype.insertAdjacentHTML = function(position, html) {
+    var pos = String(position).toLowerCase();
+    if (pos !== 'beforebegin' && pos !== 'afterbegin' &&
+        pos !== 'beforeend' && pos !== 'afterend') {
+      throw new Error("insertAdjacentHTML: invalid position '" + position + "'");
+    }
+    var tree = __parseFragment(html);
+    if (!tree || !tree.children || tree.children.length === 0) return;
+
+    // Build into a transient container so buildChildren produces real
+    // Node instances (registered via constructors), then move them to
+    // the target. Without this, fragment children would skip the
+    // __nodeRegistry path.
+    var tmp = new Element('div');
+    buildChildren(tmp, tree);
+
+    var nodes = tmp.childNodes.slice();
+    if (pos === 'afterbegin') {
+      var firstChild = this.childNodes[0];
+      for (var i = nodes.length - 1; i >= 0; i--) {
+        if (firstChild) this.insertBefore(nodes[i], firstChild);
+        else this.appendChild(nodes[i]);
+      }
+    } else if (pos === 'beforeend') {
+      for (var j = 0; j < nodes.length; j++) this.appendChild(nodes[j]);
+    } else if (pos === 'beforebegin') {
+      if (this.parentNode) {
+        for (var k = 0; k < nodes.length; k++) this.parentNode.insertBefore(nodes[k], this);
+      }
+    } else if (pos === 'afterend') {
+      if (this.parentNode) {
+        var siblingIdx = this.parentNode.childNodes.indexOf(this);
+        var afterRef = this.parentNode.childNodes[siblingIdx + 1] || null;
+        if (afterRef) {
+          for (var l = nodes.length - 1; l >= 0; l--) {
+            this.parentNode.insertBefore(nodes[l], afterRef);
+          }
+        } else {
+          for (var m = 0; m < nodes.length; m++) this.parentNode.appendChild(nodes[m]);
+        }
+      }
+    }
+  };
 
   Object.defineProperty(Element.prototype, 'outerHTML', {
     get: function() {
