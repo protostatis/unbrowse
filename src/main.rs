@@ -2781,7 +2781,9 @@ fn derive_outcome(
     // === Strong-failure short-circuits (any one fails the navigate). ===
 
     if challenge_present {
-        let prov = challenge_provider.clone().unwrap_or_else(|| "?".to_string());
+        let prov = challenge_provider
+            .clone()
+            .unwrap_or_else(|| "?".to_string());
         reasons.push(format!("challenge:{prov}"));
         return (
             false,
@@ -2846,7 +2848,8 @@ fn derive_outcome(
         // "majority interrupted" requires at least one execution to compute
         // a ratio; the all-failed branch above already covers the zero case.
         if scripts_executed > 0
-            && (scripts_interrupted as f64) > (scripts_executed as f64) * SCRIPT_INTERRUPT_FAIL_RATIO
+            && (scripts_interrupted as f64)
+                > (scripts_executed as f64) * SCRIPT_INTERRUPT_FAIL_RATIO
         {
             reasons.push(format!(
                 "scripts_pathological:{scripts_interrupted}_of_{scripts_executed}_interrupted"
@@ -2926,9 +2929,7 @@ fn derive_outcome(
                 "title_only:{blockmap_headings_count}_headings_weak"
             ));
         } else {
-            reasons.push(format!(
-                "title_only:{blockmap_title_len}char_title_weak"
-            ));
+            reasons.push(format!("title_only:{blockmap_title_len}char_title_weak"));
         }
         return (
             true,
@@ -3938,7 +3939,10 @@ mod outcome_tests {
             reasons.iter().any(|r| r.starts_with("extract:")),
             "reasons should include extract:..., got {reasons:?}"
         );
-        assert_eq!(signals.get("extract_present").and_then(|v| v.as_bool()), Some(true));
+        assert_eq!(
+            signals.get("extract_present").and_then(|v| v.as_bool()),
+            Some(true)
+        );
         assert_eq!(
             signals.get("extract_strategy").and_then(|v| v.as_str()),
             Some("json_ld")
@@ -4003,7 +4007,10 @@ mod outcome_tests {
             reasons.iter().any(|r| r.starts_with("scripts_all_failed:")),
             "reasons should include scripts_all_failed:..., got {reasons:?}"
         );
-        assert_eq!(signals.get("scripts_total").and_then(|v| v.as_u64()), Some(5));
+        assert_eq!(
+            signals.get("scripts_total").and_then(|v| v.as_u64()),
+            Some(5)
+        );
     }
 
     #[test]
@@ -4084,7 +4091,9 @@ mod outcome_tests {
         assert!(success);
         assert!(reasons.iter().any(|r| r.starts_with("network_stores:")));
         assert_eq!(
-            signals.get("network_capture_count").and_then(|v| v.as_u64()),
+            signals
+                .get("network_capture_count")
+                .and_then(|v| v.as_u64()),
             Some(2)
         );
     }
@@ -4192,7 +4201,10 @@ mod decision_record_tests {
             action: "skip",
             host: "zephr-templates.cnbc.com".to_string(),
         };
-        assert_eq!(d.decision_key().as_deref(), Some("block:zephr-templates.cnbc.com"));
+        assert_eq!(
+            d.decision_key().as_deref(),
+            Some("block:zephr-templates.cnbc.com")
+        );
     }
 
     #[test]
