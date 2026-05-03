@@ -348,7 +348,13 @@ struct Session {
     // CPU-pegged process behind.
     eval_deadline_ms: Arc<AtomicU64>,
     last_url: Option<String>,
-    last_body: Option<String>,
+    // Raw HTML body of the most recent navigate, shared with the JS layer
+    // via the __host_raw_body() host function. Arc'd so the function closure
+    // can read it after the DOM has been mutated by hydration scripts —
+    // e.g. Next.js App Router removes inline `__next_f.push` script
+    // elements after rehydrating, but the raw body still has them, which
+    // is what `strategyRscPayload` in extract.js needs.
+    last_body: Arc<Mutex<Option<String>>>,
     // True when --policy=blocklist (or UNBROWSER_POLICY=blocklist) is set.
     // Read by the external-script fetch loop in navigate_with and by the
     // __host_fetch_send hook — see src/policy.rs.
@@ -391,6 +397,9 @@ impl Session {
     fn new(profile: &Profile, policy_block: bool) -> Result<Self> {
         let js_rt = rquickjs::Runtime::new().context("rquickjs Runtime::new")?;
         let js_ctx = rquickjs::Context::full(&js_rt).context("rquickjs Context::full")?;
+        // Allocated up here so the __host_raw_body() host function below can
+        // clone the Arc into its closure before Session is constructed.
+        let last_body_arc: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
 
         // Install the always-on watchdog. Every nested QuickJS eval (including
         // ones inside settle's __pumpTimers callbacks and __pollFetches
@@ -550,6 +559,25 @@ impl Session {
                 .set("__host_resolve_url", host_resolve_url)
                 .map_err(|e| anyhow!("set __host_resolve_url: {e}"))?;
 
+            // __host_raw_body() — returns the raw HTML body of the most
+            // recent navigate. Used by extract.js's strategyRscPayload after
+            // hydration scripts have removed inline `__next_f.push` script
+            // elements (Next.js App Router does this after hydrating; the
+            // raw body still contains the RSC chunks).
+            let body_for_host = last_body_arc.clone();
+            let host_raw_body =
+                rquickjs::Function::new(ctx.clone(), move || -> String {
+                    body_for_host
+                        .lock()
+                        .ok()
+                        .and_then(|g| g.clone())
+                        .unwrap_or_default()
+                })
+                .map_err(|e| anyhow!("install __host_raw_body: {e}"))?;
+            ctx.globals()
+                .set("__host_raw_body", host_raw_body)
+                .map_err(|e| anyhow!("set __host_raw_body: {e}"))?;
+
             // __host_parse_html_fragment(html) — parses an HTML fragment
             // string into the same JSON tree shape main.rs's full document
             // parser produces. Used by dom.js's Element.innerHTML setter
@@ -590,7 +618,7 @@ impl Session {
             _fetch: fetch,
             eval_deadline_ms,
             last_url: None,
-            last_body: None,
+            last_body: last_body_arc,
             policy_block,
             nav_counter: AtomicU64::new(0),
             nav_ids_issued: Mutex::new(HashSet::new()),
@@ -1359,7 +1387,9 @@ impl Session {
         };
 
         self.last_url = Some(final_url.clone());
-        self.last_body = Some(body);
+        if let Ok(mut g) = self.last_body.lock() {
+            *g = Some(body);
+        }
 
         let blockmap = self.blockmap().unwrap_or(Value::Null);
 
@@ -2779,8 +2809,8 @@ async fn rpc_main(profile: Profile) -> Result<()> {
                 }
                 None => err_response(id, -32602, "missing 'url' param"),
             },
-            "body" => match &session.last_body {
-                Some(b) => ok_response(id, Value::String(b.clone())),
+            "body" => match session.last_body.lock().ok().and_then(|g| g.clone()) {
+                Some(b) => ok_response(id, Value::String(b)),
                 None => err_response(id, -3, "no body — call navigate first"),
             },
             "query" => match req.params.get("selector").and_then(|v| v.as_str()) {
@@ -3257,8 +3287,8 @@ async fn dispatch_tool(session: &mut Session, name: &str, args: &Value) -> Resul
             let r = str_arg("ref").ok_or_else(|| anyhow!("missing 'ref'"))?;
             session.submit(r).await
         }
-        "body" => match &session.last_body {
-            Some(b) => Ok(Value::String(b.clone())),
+        "body" => match session.last_body.lock().ok().and_then(|g| g.clone()) {
+            Some(b) => Ok(Value::String(b)),
             None => Err(anyhow!("no body — call navigate first")),
         },
         "eval" => {
