@@ -705,7 +705,7 @@ impl Session {
         // user code and can loop forever. Earlier code suspended it for
         // the whole closure, which let cached bundles run unbounded.
         let dl = self.eval_deadline_ms.clone();
-        let result = self.js_ctx.with(|ctx| -> Result<()> {
+        self.js_ctx.with(|ctx| -> Result<()> {
             // Try cache. Watchdog stays armed — load_and_eval runs user code.
             if let Some(bytes) = bytecode_cache::read(root, &key) {
                 let bytes_len = bytes.len();
@@ -800,8 +800,7 @@ impl Session {
                     }
                 }
             }
-        });
-        result
+        })
     }
 
     fn eval(&self, code: &str) -> Result<Value> {
@@ -1488,13 +1487,13 @@ impl Session {
                                     });
                                     // Carry truncated all_hits summary for visibility.
                                     if let Some(map) = sub.as_object_mut() {
-                                        let summary: Vec<Value> = hits.iter().filter_map(|h| {
+                                        let summary: Vec<Value> = hits.iter().map(|h| {
                                             let s = serde_json::to_string(h).map(|s| s.len()).unwrap_or(0);
-                                            Some(json!({
+                                            json!({
                                                 "strategy": h.get("strategy").cloned().unwrap_or(Value::Null),
                                                 "confidence": h.get("confidence").cloned().unwrap_or(Value::Null),
                                                 "size_bytes": s,
-                                            }))
+                                            })
                                         }).collect();
                                         map.insert(
                                             "all_hits_summary".into(),
