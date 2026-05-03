@@ -14,6 +14,7 @@ cookie_store = "0.21"
 html5ever = "=0.38.0"
 http = "1"
 markup5ever_rcdom = "=0.38.0"
+rand = "0.8"
 rquickjs = { version = "0.11" }
 rquest = { version = "5", features = ["cookies"] }
 rquest-util = { version = "2", features = ["emulation-serde"] }
