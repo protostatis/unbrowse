@@ -1079,14 +1079,34 @@ impl Session {
                         {
                             let decision_key = format!("block:{host}");
                             const THRESHOLD: f64 = 0.5;
+                            // Minimum observation count before we'll
+                            // trust a posterior to override the
+                            // deterministic block. Tier-1.5 prefit
+                            // entries ship with `Beta(1, 1) / n=0`
+                            // placeholders ("we know about this
+                            // domain, no data yet") — sampling those
+                            // gives a uniform draw and would let
+                            // ~50% of hand-curated tracker hits
+                            // through. Bias is "deterministic until
+                            // evidence flips it": only consult once
+                            // we've seen ≥5 trials, which is the
+                            // smallest n where a Beta posterior's
+                            // 95% credible interval is meaningfully
+                            // narrower than the prior.
+                            const MIN_POSTERIOR_OBSERVATIONS: u64 = 5;
                             // Default to the deterministic block when no
-                            // posterior exists (preserves prior behavior on
-                            // un-trained entries). When a posterior IS
-                            // present, use Thompson sampling via
-                            // `decide_traced` so the gate is informed.
-                            let has_posterior =
-                                bundle.lookup_posterior(&p.domain, &decision_key).is_some();
-                            let (block_now, outcome) = if has_posterior {
+                            // posterior exists OR when the posterior
+                            // is too thin to be informative
+                            // (preserves prior behavior on un-trained
+                            // entries). When a posterior IS present
+                            // and well-observed, use Thompson sampling
+                            // via `decide_traced` so the gate is informed.
+                            let post_opt = bundle.lookup_posterior(&p.domain, &decision_key);
+                            let has_useful_posterior = post_opt
+                                .as_ref()
+                                .map(|p| p.n >= MIN_POSTERIOR_OBSERVATIONS)
+                                .unwrap_or(false);
+                            let (block_now, outcome) = if has_useful_posterior {
                                 let mut rng = rand::thread_rng();
                                 let out = bundle.decide_traced(
                                     &mut rng,

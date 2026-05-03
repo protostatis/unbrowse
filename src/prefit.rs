@@ -755,4 +755,54 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn beta_1_1_n_0_can_return_unblocked_caller_must_gate_on_n() {
+        // Pinning the contract that the runtime relies on: a Beta(1, 1)
+        // posterior with `n = 0` (the placeholder shape every Tier-1.5
+        // prefit blocklist entry ships with) is treated by `decide_traced`
+        // as a uniform draw — half the time it will return
+        // `blocked = false`. That is correct math (Thompson sampling of
+        // Beta(1,1) IS uniform), so the call site, NOT this function,
+        // is responsible for refusing to consult posteriors until they
+        // have enough observations to be informative. The runtime gate
+        // for this lives in `src/main.rs` as
+        // `MIN_POSTERIOR_OBSERVATIONS`.
+        //
+        // Regression guard for: "regenerated v2 bundle ships
+        // Beta(1,1)/n=0 placeholders for hand-curated Tier-1.5
+        // entries → Thompson sample halves the block rate" (the bug
+        // that prompted MIN_POSTERIOR_OBSERVATIONS to land in main.rs).
+        use rand::SeedableRng;
+        use rand::rngs::StdRng;
+        let placeholder = BetaPosterior {
+            alpha: 1.0,
+            beta: 1.0,
+            n: 0,
+        };
+        let b = make_bundle_with_posterior("placeholder.com", "block:t.com", placeholder, 2);
+
+        // Empirical: at threshold 0.5, ~half the seeds produce
+        // `blocked=false`. Sweeping a small batch should yield at
+        // least one unblocked outcome — proving `decide_traced` alone
+        // does NOT give us deterministic blocking on placeholder
+        // posteriors. A gate on `n` is the caller's job.
+        let mut saw_unblocked = false;
+        for seed in 0..64u64 {
+            let mut rng = StdRng::seed_from_u64(seed);
+            let out = b.decide_traced(&mut rng, "placeholder.com", "block:t.com", 0.5);
+            // Sanity: posterior is the placeholder we inserted.
+            assert_eq!(out.posterior, Some(placeholder));
+            if !out.blocked {
+                saw_unblocked = true;
+                break;
+            }
+        }
+        assert!(
+            saw_unblocked,
+            "Beta(1,1)/n=0 should sometimes sample below 0.5 — \
+             if this assert ever fails, the Thompson sampler is broken \
+             AND callers no longer need the n-gate"
+        );
+    }
 }
