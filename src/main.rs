@@ -534,6 +534,23 @@ impl Session {
                 .set("__host_resolve_url", host_resolve_url)
                 .map_err(|e| anyhow!("set __host_resolve_url: {e}"))?;
 
+            // __host_parse_html_fragment(html) — parses an HTML fragment
+            // string into the same JSON tree shape main.rs's full document
+            // parser produces. Used by dom.js's Element.innerHTML setter
+            // and insertAdjacentHTML(); without it those silently no-op.
+            // Context element is <body> (matches what real browsers do
+            // for innerHTML on most elements). Returns a fragment-rooted
+            // tree as JSON; caller JSON.parses and feeds to buildChildren.
+            // (Implements piece #2 from the SPA-content-extraction proposal.)
+            let host_parse_fragment =
+                rquickjs::Function::new(ctx.clone(), |html: String| -> String {
+                    parse_html_fragment_to_json(&html)
+                })
+                .map_err(|e| anyhow!("install __host_parse_html_fragment: {e}"))?;
+            ctx.globals()
+                .set("__host_parse_html_fragment", host_parse_fragment)
+                .map_err(|e| anyhow!("set __host_parse_html_fragment: {e}"))?;
+
             Ok(())
         })?;
         Ok(Self {
@@ -2025,6 +2042,57 @@ fn parse_html_to_tree(html: &str) -> Value {
         }
     }
     json!({"type": "element", "tag": "html", "attrs": {}, "children": []})
+}
+
+// Parse an HTML fragment (e.g. the rhs of `el.innerHTML = '<p>...</p>'`).
+// Context element is <body> — matches what real browsers do for innerHTML
+// on most elements. (Tables and selects use different contexts; v1 punts
+// on those — they parse OK under <body> in practice for typical uses.)
+//
+// Returns a JSON string with the shape {type: "element", tag: "fragment",
+// attrs: {}, children: [...]} where each child matches the format from
+// parse_html_to_tree. Caller is JS-side __parseHTMLFragment() in
+// dom.js — it JSON.parses the string and feeds children to buildChildren.
+//
+// Why JSON-string instead of constructing a JS object: avoids reaching
+// across the rquickjs binding boundary to build nested objects, which
+// is significantly more lines and harder to maintain than a JSON dance.
+fn parse_html_fragment_to_json(html: &str) -> String {
+    use html5ever::interface::QualName;
+    use html5ever::{local_name, ns};
+
+    let context = QualName::new(None, ns!(html), local_name!("body"));
+    let dom = html5ever::parse_fragment(
+        RcDom::default(),
+        Default::default(),
+        context,
+        Vec::new(),
+        false,
+    )
+    .from_utf8()
+    .read_from(&mut html.as_bytes())
+    .unwrap_or_else(|_| RcDom::default());
+
+    // parse_fragment produces a synthetic context element under
+    // dom.document — its children are the actual fragment.
+    let mut children: Vec<Value> = Vec::new();
+    for ctx_child in dom.document.children.borrow().iter() {
+        if matches!(&ctx_child.data, NodeData::Element { .. }) {
+            for inner in ctx_child.children.borrow().iter() {
+                if let Some(v) = child_to_json(inner) {
+                    children.push(v);
+                }
+            }
+            break;
+        }
+    }
+    let tree = json!({
+        "type": "element",
+        "tag": "fragment",
+        "attrs": {},
+        "children": children,
+    });
+    serde_json::to_string(&tree).unwrap_or_else(|_| "{}".to_string())
 }
 
 fn node_to_json(handle: &Handle) -> Value {
