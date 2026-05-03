@@ -1399,21 +1399,71 @@ impl Session {
                 Ok(v) => {
                     let size = serde_json::to_string(&v).map(|s| s.len()).unwrap_or(0);
                     if size > MAX_INLINE_EXTRACT_BYTES {
-                        let strategy = v.get("strategy").cloned().unwrap_or(Value::Null);
-                        let confidence = v.get("confidence").cloned().unwrap_or(Value::Null);
-                        (
-                            Some(json!({
-                                "strategy": strategy,
-                                "confidence": confidence,
-                                "data": null,
-                                "truncated": true,
-                                "size_bytes": size,
-                                "hint": format!(
-                                    "extract result {size} bytes exceeds {MAX_INLINE_EXTRACT_BYTES} byte inline cap; call extract() to retrieve full data"
-                                ),
-                            })),
-                            None,
-                        )
+                        // Primary doesn't fit. Walk all_hits (already sorted
+                        // by confidence desc) and pick the first one that
+                        // does fit — gives the agent SOME usable data inline
+                        // instead of a stub. e.g. Polymarket's next_data is
+                        // ~750KB; json_ld (20KB, conf 0.95) fits and carries
+                        // the markets list. Agent can call extract() for the
+                        // full primary if they want.
+                        let primary_strategy =
+                            v.get("strategy").cloned().unwrap_or(Value::Null);
+                        let primary_confidence =
+                            v.get("confidence").cloned().unwrap_or(Value::Null);
+                        let mut chosen: Option<Value> = None;
+                        if let Some(hits) = v.get("all_hits").and_then(|h| h.as_array()) {
+                            for hit in hits {
+                                let hit_size =
+                                    serde_json::to_string(hit).map(|s| s.len()).unwrap_or(0);
+                                if hit_size <= MAX_INLINE_EXTRACT_BYTES {
+                                    let mut sub = json!({
+                                        "strategy": hit.get("strategy").cloned().unwrap_or(Value::Null),
+                                        "confidence": hit.get("confidence").cloned().unwrap_or(Value::Null),
+                                        "data": hit.get("data").cloned().unwrap_or(Value::Null),
+                                        "primary_truncated": {
+                                            "strategy": primary_strategy.clone(),
+                                            "confidence": primary_confidence.clone(),
+                                            "size_bytes": size,
+                                            "hint": format!(
+                                                "primary strategy {strat} ({size} bytes) exceeds {MAX_INLINE_EXTRACT_BYTES} byte inline cap; this fallback is the largest fitting hit. Call extract() for the full primary.",
+                                                strat = primary_strategy
+                                            ),
+                                        },
+                                    });
+                                    // Carry truncated all_hits summary for visibility.
+                                    if let Some(map) = sub.as_object_mut() {
+                                        let summary: Vec<Value> = hits.iter().filter_map(|h| {
+                                            let s = serde_json::to_string(h).map(|s| s.len()).unwrap_or(0);
+                                            Some(json!({
+                                                "strategy": h.get("strategy").cloned().unwrap_or(Value::Null),
+                                                "confidence": h.get("confidence").cloned().unwrap_or(Value::Null),
+                                                "size_bytes": s,
+                                            }))
+                                        }).collect();
+                                        map.insert("all_hits_summary".into(), Value::Array(summary));
+                                    }
+                                    chosen = Some(sub);
+                                    break;
+                                }
+                            }
+                        }
+                        if let Some(c) = chosen {
+                            (Some(c), None)
+                        } else {
+                            (
+                                Some(json!({
+                                    "strategy": primary_strategy,
+                                    "confidence": primary_confidence,
+                                    "data": null,
+                                    "truncated": true,
+                                    "size_bytes": size,
+                                    "hint": format!(
+                                        "extract result {size} bytes exceeds {MAX_INLINE_EXTRACT_BYTES} byte inline cap and no smaller hit fit either; call extract() to retrieve full data"
+                                    ),
+                                })),
+                                None,
+                            )
+                        }
                     } else {
                         (Some(v), None)
                     }

@@ -57,10 +57,21 @@
     if (!parsed) return null;
     // Drill to the most useful subtree if available.
     var page = parsed && parsed.props && parsed.props.pageProps;
+    if (!page) {
+      return { strategy: 'next_data', confidence: 0.7, data: parsed };
+    }
+    // pageProps with substantial nested content is almost always the page's
+    // primary app data (markets list on Polymarket, products on a Shopify-
+    // Next site, posts on a forum). Bump above json_ld's 0.95 so the
+    // auto-picker prefers it over the typically-smaller schema.org metadata.
+    // Threshold (1 KB serialized) excludes routing-only pageProps that some
+    // marketing pages emit.
+    var size = 0;
+    try { size = JSON.stringify(page).length; } catch (e) {}
     return {
       strategy: 'next_data',
-      confidence: page ? 0.9 : 0.7,
-      data: page || parsed,
+      confidence: size > 1024 ? 0.97 : 0.85,
+      data: page,
     };
   }
 
@@ -355,6 +366,7 @@
     }
     var tried = [];
     var best = null;
+    var hits = [];  // strategies with confidence >= 0.5, full data carried
     for (var j = 0; j < all.length; j++) {
       var name = all[j][0], fn = all[j][1];
       try {
@@ -362,13 +374,22 @@
         tried.push({ strategy: name, confidence: res ? res.confidence : 0,
                      hit: !!res });
         if (res && (!best || res.confidence > best.confidence)) best = res;
+        if (res && res.confidence >= 0.5) {
+          hits.push({ strategy: name, confidence: res.confidence, data: res.data });
+        }
       } catch (e) {
         tried.push({ strategy: name, confidence: 0, hit: false,
                      error: String(e && e.message || e) });
       }
     }
     if (!best) return { strategy: 'none', confidence: 0, data: null, tried: tried };
+    // Sort hits by confidence desc; cap at 5 to bound payload size on pages
+    // where many strategies hit (Polymarket: json_ld + next_data +
+    // json_in_script + og_meta all return data).
+    hits.sort(function(a, b) { return b.confidence - a.confidence; });
+    if (hits.length > 5) hits.length = 5;
     best.tried = tried;
+    best.all_hits = hits;
     return best;
   };
 })();
