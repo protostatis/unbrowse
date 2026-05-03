@@ -670,15 +670,15 @@ impl Session {
         }
         let key = bytecode_cache::cache_key(source, &self.shim_hash);
         let root = &self.bytecode_cache_root;
-        // Suspend the eval-deadline watchdog for the compile path. The
-        // watchdog interrupt fires periodically inside JS_Eval and aborts
-        // when now >= deadline. For COMPILE_ONLY eval that doesn't run
-        // user code, the watchdog spuriously aborts on scripts above
-        // ~16 KB (observed empirically). Compile is bounded by source
-        // length anyway. Restored before returning.
-        let prev_dl = self.eval_deadline_ms.swap(0, Ordering::Relaxed);
+        // The eval-deadline watchdog must be SUSPENDED only across
+        // compile_to_bytecode (JS_Eval COMPILE_ONLY) — the watchdog
+        // spuriously aborts on >~16KB scripts during the parse-only path.
+        // It MUST stay armed across load_and_eval, which actually runs
+        // user code and can loop forever. Earlier code suspended it for
+        // the whole closure, which let cached bundles run unbounded.
+        let dl = self.eval_deadline_ms.clone();
         let result = self.js_ctx.with(|ctx| -> Result<()> {
-            // Try cache.
+            // Try cache. Watchdog stays armed — load_and_eval runs user code.
             if let Some(bytes) = bytecode_cache::read(root, &key) {
                 let bytes_len = bytes.len();
                 match bytecode_cache::load_and_eval(&ctx, &bytes) {
@@ -695,23 +695,34 @@ impl Session {
                         return Ok(());
                     }
                     Err(e) => {
-                        // Corrupt or version-skew. Fall through to recompile;
-                        // the corrupt file gets overwritten by the write below.
+                        // Could be a true JS exception OR a watchdog interrupt
+                        // (cached bundle ran past the deadline). Surface either
+                        // back to the caller so script_executed gets the right
+                        // error and `interrupted` flag.
                         emit_event(
                             "bytecode_cache",
                             json!({
                                 "schema_version": 1,
-                                "hit": false,
+                                "hit": true,
                                 "name": name,
                                 "load_error": e,
                             }),
                         );
+                        let caught = ctx.catch();
+                        return if caught.is_null() || caught.is_undefined() {
+                            Err(anyhow!("bytecode eval threw (no exception captured)"))
+                        } else {
+                            Err(anyhow!("{}", format_js_exception(caught)))
+                        };
                     }
                 }
             }
-            // Cache miss: compile, persist, then execute via the
-            // freshly-produced bytecode (avoids running JS_Eval twice).
-            match bytecode_cache::compile_to_bytecode(&ctx, source, name) {
+            // Cache miss: compile (watchdog suspended just for this call),
+            // persist, then execute via the freshly-produced bytecode.
+            let prev_dl = dl.swap(0, Ordering::Relaxed);
+            let compile_res = bytecode_cache::compile_to_bytecode(&ctx, source, name);
+            dl.store(prev_dl, Ordering::Relaxed);
+            match compile_res {
                 Ok(bytes) => {
                     let _ = bytecode_cache::write(root, &key, &bytes);
                     let bytes_len = bytes.len();
@@ -727,12 +738,15 @@ impl Session {
                     );
                     match result {
                         Ok(()) => Ok(()),
-                        // Eval-time exception — surface via ctx.catch
-                        // exactly like plain eval would.
-                        Err(_) => match ctx.catch().get::<rquickjs::Value>() {
-                            Ok(_) => Err(anyhow!("{}", format_js_exception(ctx.catch()))),
-                            Err(_) => Err(anyhow!("bytecode eval threw (no exception captured)")),
-                        },
+                        // Eval-time exception OR watchdog interrupt.
+                        Err(_) => {
+                            let caught = ctx.catch();
+                            if caught.is_null() || caught.is_undefined() {
+                                Err(anyhow!("bytecode eval threw (no exception captured)"))
+                            } else {
+                                Err(anyhow!("{}", format_js_exception(caught)))
+                            }
+                        }
                     }
                 }
                 Err(e) => {
@@ -759,9 +773,6 @@ impl Session {
                 }
             }
         });
-        // Restore the watchdog before returning so the rest of the
-        // navigate stays bounded.
-        self.eval_deadline_ms.store(prev_dl, Ordering::Relaxed);
         result
     }
 
