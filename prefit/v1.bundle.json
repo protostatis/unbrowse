@@ -1,24 +1,85 @@
 {
-  "schema_version": 1,
-  "fit_timestamp": 1746230400,
+  "schema_version": 2,
+  "fit_timestamp": 1777823874,
   "fit_corpus_size": 10,
-  "training_pipeline_version": "v0-hand-curated",
+  "training_pipeline_version": "v2-from-handcurated",
   "domains": {
-    "news.ycombinator.com": {
-      "domain": "news.ycombinator.com",
-      "framework": "static_ssr",
-      "blocklist_additions": [],
-      "required_patterns": ["news.ycombinator.com/hn.js"],
-      "settle_distribution": {"p50_ms": 50, "p90_ms": 200, "p95_ms": 500},
-      "shape_hint": "static_table"
+    "cnbc.com": {
+      "domain": "cnbc.com",
+      "framework": "react-18",
+      "blocklist_additions": [
+        "zephr-templates.cnbc.com",
+        "geo.cnbc.com",
+        "track.cnbc.com",
+        "assets.bounceexchange.com",
+        "static.bounceexchange.com",
+        "cdn.bullwhip.cloud"
+      ],
+      "required_patterns": [
+        "i.cnbc.com/_next/static"
+      ],
+      "settle_distribution": {
+        "p50_ms": 1800,
+        "p90_ms": 2500,
+        "p95_ms": 4000
+      },
+      "shape_hint": "spa_shell_with_density",
+      "posteriors": {
+        "block:zephr-templates.cnbc.com": {
+          "alpha": 1.0,
+          "beta": 1.0,
+          "n": 0
+        },
+        "block:geo.cnbc.com": {
+          "alpha": 1.0,
+          "beta": 1.0,
+          "n": 0
+        },
+        "block:track.cnbc.com": {
+          "alpha": 1.0,
+          "beta": 1.0,
+          "n": 0
+        },
+        "block:assets.bounceexchange.com": {
+          "alpha": 1.0,
+          "beta": 1.0,
+          "n": 0
+        },
+        "block:static.bounceexchange.com": {
+          "alpha": 1.0,
+          "beta": 1.0,
+          "n": 0
+        },
+        "block:cdn.bullwhip.cloud": {
+          "alpha": 1.0,
+          "beta": 1.0,
+          "n": 0
+        },
+        "settle_fast:react-18": {
+          "alpha": 1.0,
+          "beta": 1.0,
+          "n": 0
+        }
+      }
     },
     "en.wikipedia.org": {
       "domain": "en.wikipedia.org",
       "framework": "static_ssr",
       "blocklist_additions": [],
       "required_patterns": [],
-      "settle_distribution": {"p50_ms": 100, "p90_ms": 300, "p95_ms": 600},
-      "shape_hint": "static_article"
+      "settle_distribution": {
+        "p50_ms": 100,
+        "p90_ms": 300,
+        "p95_ms": 600
+      },
+      "shape_hint": "static_article",
+      "posteriors": {
+        "settle_fast:static_ssr": {
+          "alpha": 1.0,
+          "beta": 1.0,
+          "n": 0
+        }
+      }
     },
     "github.com": {
       "domain": "github.com",
@@ -28,8 +89,69 @@
         "api.github.com/_private/browser/stats"
       ],
       "required_patterns": [],
-      "settle_distribution": {"p50_ms": 800, "p90_ms": 1500, "p95_ms": 2500},
-      "shape_hint": "react_ssr_hydrated"
+      "settle_distribution": {
+        "p50_ms": 800,
+        "p90_ms": 1500,
+        "p95_ms": 2500
+      },
+      "shape_hint": "react_ssr_hydrated",
+      "posteriors": {
+        "block:collector.github.com": {
+          "alpha": 1.0,
+          "beta": 1.0,
+          "n": 0
+        },
+        "block:api.github.com/_private/browser/stats": {
+          "alpha": 1.0,
+          "beta": 1.0,
+          "n": 0
+        },
+        "settle_fast:react-18": {
+          "alpha": 1.0,
+          "beta": 1.0,
+          "n": 0
+        }
+      }
+    },
+    "kalshi.com": {
+      "domain": "kalshi.com",
+      "framework": "react-18",
+      "blocklist_additions": [],
+      "required_patterns": [],
+      "settle_distribution": {
+        "p50_ms": 1500,
+        "p90_ms": 2500,
+        "p95_ms": 4000
+      },
+      "shape_hint": "card_grid_spa",
+      "posteriors": {
+        "settle_fast:react-18": {
+          "alpha": 1.0,
+          "beta": 1.0,
+          "n": 0
+        }
+      }
+    },
+    "news.ycombinator.com": {
+      "domain": "news.ycombinator.com",
+      "framework": "static_ssr",
+      "blocklist_additions": [],
+      "required_patterns": [
+        "news.ycombinator.com/hn.js"
+      ],
+      "settle_distribution": {
+        "p50_ms": 50,
+        "p90_ms": 200,
+        "p95_ms": 500
+      },
+      "shape_hint": "static_table",
+      "posteriors": {
+        "settle_fast:static_ssr": {
+          "alpha": 1.0,
+          "beta": 1.0,
+          "n": 0
+        }
+      }
     },
     "npmjs.com": {
       "domain": "npmjs.com",
@@ -39,8 +161,55 @@
         "telemetry.npmjs.com"
       ],
       "required_patterns": [],
-      "settle_distribution": {"p50_ms": 600, "p90_ms": 1200, "p95_ms": 2000},
-      "shape_hint": "next_inlined_data"
+      "settle_distribution": {
+        "p50_ms": 600,
+        "p90_ms": 1200,
+        "p95_ms": 2000
+      },
+      "shape_hint": "next_inlined_data",
+      "posteriors": {
+        "block:logs.npmjs.com": {
+          "alpha": 1.0,
+          "beta": 1.0,
+          "n": 0
+        },
+        "block:telemetry.npmjs.com": {
+          "alpha": 1.0,
+          "beta": 1.0,
+          "n": 0
+        },
+        "settle_fast:next-14": {
+          "alpha": 1.0,
+          "beta": 1.0,
+          "n": 0
+        }
+      }
+    },
+    "polymarket.com": {
+      "domain": "polymarket.com",
+      "framework": "react-18",
+      "blocklist_additions": [
+        "polymarket-amp.s3.us-east-2.amazonaws.com"
+      ],
+      "required_patterns": [],
+      "settle_distribution": {
+        "p50_ms": 1200,
+        "p90_ms": 2200,
+        "p95_ms": 3500
+      },
+      "shape_hint": "card_grid_spa",
+      "posteriors": {
+        "block:polymarket-amp.s3.us-east-2.amazonaws.com": {
+          "alpha": 1.0,
+          "beta": 1.0,
+          "n": 0
+        },
+        "settle_fast:react-18": {
+          "alpha": 1.0,
+          "beta": 1.0,
+          "n": 0
+        }
+      }
     },
     "reddit.com": {
       "domain": "reddit.com",
@@ -52,8 +221,39 @@
         "w3-reporting-nel.reddit.com"
       ],
       "required_patterns": [],
-      "settle_distribution": {"p50_ms": 1500, "p90_ms": 3000, "p95_ms": 5000},
-      "shape_hint": "web_components_dom_heavy"
+      "settle_distribution": {
+        "p50_ms": 1500,
+        "p90_ms": 3000,
+        "p95_ms": 5000
+      },
+      "shape_hint": "web_components_dom_heavy",
+      "posteriors": {
+        "block:events.redditmedia.com": {
+          "alpha": 1.0,
+          "beta": 1.0,
+          "n": 0
+        },
+        "block:alb.reddit.com": {
+          "alpha": 1.0,
+          "beta": 1.0,
+          "n": 0
+        },
+        "block:alb.staging.reddit.com": {
+          "alpha": 1.0,
+          "beta": 1.0,
+          "n": 0
+        },
+        "block:w3-reporting-nel.reddit.com": {
+          "alpha": 1.0,
+          "beta": 1.0,
+          "n": 0
+        },
+        "settle_fast:web_components": {
+          "alpha": 1.0,
+          "beta": 1.0,
+          "n": 0
+        }
+      }
     },
     "youtube.com": {
       "domain": "youtube.com",
@@ -66,41 +266,44 @@
         "play.google.com/log"
       ],
       "required_patterns": [],
-      "settle_distribution": {"p50_ms": 2000, "p90_ms": 4000, "p95_ms": 8000},
-      "shape_hint": "data_store_inlined_ytinitialdata"
-    },
-    "cnbc.com": {
-      "domain": "cnbc.com",
-      "framework": "react-18",
-      "blocklist_additions": [
-        "zephr-templates.cnbc.com",
-        "geo.cnbc.com",
-        "track.cnbc.com",
-        "assets.bounceexchange.com",
-        "static.bounceexchange.com",
-        "cdn.bullwhip.cloud"
-      ],
-      "required_patterns": ["i.cnbc.com/_next/static"],
-      "settle_distribution": {"p50_ms": 1800, "p90_ms": 2500, "p95_ms": 4000},
-      "shape_hint": "spa_shell_with_density"
-    },
-    "polymarket.com": {
-      "domain": "polymarket.com",
-      "framework": "react-18",
-      "blocklist_additions": [
-        "polymarket-amp.s3.us-east-2.amazonaws.com"
-      ],
-      "required_patterns": [],
-      "settle_distribution": {"p50_ms": 1200, "p90_ms": 2200, "p95_ms": 3500},
-      "shape_hint": "card_grid_spa"
-    },
-    "kalshi.com": {
-      "domain": "kalshi.com",
-      "framework": "react-18",
-      "blocklist_additions": [],
-      "required_patterns": [],
-      "settle_distribution": {"p50_ms": 1500, "p90_ms": 2500, "p95_ms": 4000},
-      "shape_hint": "card_grid_spa"
+      "settle_distribution": {
+        "p50_ms": 2000,
+        "p90_ms": 4000,
+        "p95_ms": 8000
+      },
+      "shape_hint": "data_store_inlined_ytinitialdata",
+      "posteriors": {
+        "block:www.youtube.com/youtubei/v1/log_event": {
+          "alpha": 1.0,
+          "beta": 1.0,
+          "n": 0
+        },
+        "block:youtube.com/api/stats": {
+          "alpha": 1.0,
+          "beta": 1.0,
+          "n": 0
+        },
+        "block:youtube.com/csi_204": {
+          "alpha": 1.0,
+          "beta": 1.0,
+          "n": 0
+        },
+        "block:youtube.com/generate_204": {
+          "alpha": 1.0,
+          "beta": 1.0,
+          "n": 0
+        },
+        "block:play.google.com/log": {
+          "alpha": 1.0,
+          "beta": 1.0,
+          "n": 0
+        },
+        "settle_fast:data_store_spa": {
+          "alpha": 1.0,
+          "beta": 1.0,
+          "n": 0
+        }
+      }
     },
     "zillow.com": {
       "domain": "zillow.com",
@@ -110,25 +313,58 @@
         "perimeterx-bot-detection.zillow.com"
       ],
       "required_patterns": [],
-      "settle_distribution": {"p50_ms": 2500, "p90_ms": 5000, "p95_ms": 8000},
-      "shape_hint": "bot_protected_ssr_with_listings"
+      "settle_distribution": {
+        "p50_ms": 2500,
+        "p90_ms": 5000,
+        "p95_ms": 8000
+      },
+      "shape_hint": "bot_protected_ssr_with_listings",
+      "posteriors": {
+        "block:geo.zillow.com": {
+          "alpha": 1.0,
+          "beta": 1.0,
+          "n": 0
+        },
+        "block:perimeterx-bot-detection.zillow.com": {
+          "alpha": 1.0,
+          "beta": 1.0,
+          "n": 0
+        },
+        "settle_fast:react-18": {
+          "alpha": 1.0,
+          "beta": 1.0,
+          "n": 0
+        }
+      }
     }
   },
   "framework_priors": {
     "react-18": {
       "framework": "react-18",
       "blocklist_additions": [],
-      "settle_distribution": {"p50_ms": 1500, "p90_ms": 3000, "p95_ms": 5000}
+      "settle_distribution": {
+        "p50_ms": 1500,
+        "p90_ms": 3000,
+        "p95_ms": 5000
+      }
     },
     "next-14": {
       "framework": "next-14",
       "blocklist_additions": [],
-      "settle_distribution": {"p50_ms": 1200, "p90_ms": 2500, "p95_ms": 4000}
+      "settle_distribution": {
+        "p50_ms": 1200,
+        "p90_ms": 2500,
+        "p95_ms": 4000
+      }
     },
     "static_ssr": {
       "framework": "static_ssr",
       "blocklist_additions": [],
-      "settle_distribution": {"p50_ms": 100, "p90_ms": 400, "p95_ms": 800}
+      "settle_distribution": {
+        "p50_ms": 100,
+        "p90_ms": 400,
+        "p95_ms": 800
+      }
     }
   }
 }
