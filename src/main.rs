@@ -924,7 +924,7 @@ impl Session {
                             "solution_url": solution_url,
                         }),
                     );
-                    return self.navigate(&solution_url, exec_scripts).await;
+                    return Box::pin(self.navigate(&solution_url, exec_scripts)).await;
                 }
             }
         }
@@ -1237,6 +1237,17 @@ impl Session {
             let mut interrupted: usize = 0;
             for (script_id, kind_str, url, source) in &sources {
                 let eval_start = std::time::Instant::now();
+                // Set document.currentScript so webpack's automatic-publicPath
+                // detection works. Bluesky's main.js (and many webpack bundles
+                // with chunked output) calls
+                //   __webpack_require__.p = <derive from currentScript.src>
+                // and throws "Automatic publicPath is not supported in this
+                // browser" if currentScript is missing — that bails hydration
+                // before any DOM mounting happens.
+                if let Some(u) = url.as_deref() {
+                    let url_lit = serde_json::to_string(u).unwrap_or_default();
+                    let _ = self.eval_void(&format!("__setCurrentScript({url_lit})"));
+                }
                 // Three-way routing:
                 //   1. Module-shaped sources (PR #11) → __loadModule, which
                 //      recursively loads deps then evals the cleaned body.
@@ -1255,6 +1266,9 @@ impl Session {
                     let cache_name = url.as_deref().unwrap_or("inline").to_string();
                     self.eval_with_cache(source, &cache_name)
                 };
+                if url.is_some() {
+                    let _ = self.eval_void("__setCurrentScript(null)");
+                }
                 let duration_us = eval_start.elapsed().as_micros() as u64;
                 match result {
                     Err(e) => {
@@ -2116,6 +2130,96 @@ fn format_js_exception(ex: rquickjs::Value) -> String {
         return s;
     }
     "<unknown JS exception>".to_string()
+}
+
+// Reddit JS proof-of-work challenge solver.
+//
+// Reddit serves a small challenge page when it suspects automation. The page
+// contains one inline <script> with a trivial proof-of-work:
+//
+//   await(async e=>e+e)("HEXVALUE")  →  solution = HEXVALUE + HEXVALUE
+//
+// The solution is submitted as a GET query param back to the original URL along
+// with a per-request token. This is solvable deterministically without a real
+// browser — we just parse the HTML, compute, and re-navigate.
+//
+// Returns the fully-resolved solution URL, or None if the body doesn't look
+// like Reddit's JS challenge.
+fn parse_reddit_js_challenge_url(body: &str, current_url: &str) -> Option<String> {
+    // Detect the specific JS proof-of-work marker.
+    const SCRIPT_MARKER: &str = "await(async e=>e+e)(\"";
+    let script_pos = body.find(SCRIPT_MARKER)?;
+    let after_quote = &body[script_pos + SCRIPT_MARKER.len()..];
+    let val_end = after_quote.find('"')?;
+    let challenge_value = &after_quote[..val_end];
+
+    // Sanity: must be a non-empty hex string of reasonable length.
+    if challenge_value.is_empty()
+        || challenge_value.len() > 64
+        || !challenge_value.chars().all(|c| c.is_ascii_hexdigit())
+    {
+        return None;
+    }
+    let solution = format!("{0}{0}", challenge_value);
+
+    // Parse form action — expect: <form hidden method="GET" action="/path/">
+    // Attribute order in the HTML is fixed, but scan for action= anywhere in
+    // the first <form tag to be tolerant of minor formatting changes.
+    let form_start = body.find("<form ")?;
+    let form_tag_end = body[form_start..].find('>')?;
+    let form_tag = &body[form_start..form_start + form_tag_end];
+    let action = extract_attr(form_tag, "action")?;
+
+    // Resolve relative action against the current page URL.
+    let base = url::Url::parse(current_url).ok()?;
+    let mut target = base.join(&action).ok()?;
+
+    // Build query string from hidden form fields + computed solution.
+    // Ordering matches what a real browser would send.
+    {
+        let mut qp = target.query_pairs_mut();
+        qp.append_pair("solution", &solution);
+        qp.append_pair("js_challenge", "1");
+        if let Some(token) = extract_hidden_input(body, "token") {
+            qp.append_pair("token", &token);
+        }
+        // jsc_orig_r carries any query params that were on the original URL before
+        // the challenge redirect; use whatever the form says (often empty).
+        let orig_r = extract_hidden_input(body, "jsc_orig_r").unwrap_or_default();
+        qp.append_pair("jsc_orig_r", &orig_r);
+    }
+    Some(target.to_string())
+}
+
+// Extract the value of an HTML attribute from a tag string (e.g. the text
+// between `<form` and `>`). Handles both single- and double-quoted values.
+fn extract_attr(tag: &str, name: &str) -> Option<String> {
+    let needle_dq = format!(r#"{}=""#, name);
+    let needle_sq = format!("{}='", name);
+    if let Some(pos) = tag.find(&needle_dq) {
+        let rest = &tag[pos + needle_dq.len()..];
+        let end = rest.find('"')?;
+        return Some(rest[..end].to_string());
+    }
+    if let Some(pos) = tag.find(&needle_sq) {
+        let rest = &tag[pos + needle_sq.len()..];
+        let end = rest.find('\'')?;
+        return Some(rest[..end].to_string());
+    }
+    None
+}
+
+// Find a hidden <input name="NAME" value="..."> in the HTML and return its value.
+// Handles both `name` before `value` and `value` before `name` attribute order.
+fn extract_hidden_input(body: &str, name: &str) -> Option<String> {
+    let name_needle = format!(r#"name="{}""#, name);
+    let pos = body.find(&name_needle)?;
+    // Scan backwards to the opening `<input` for this tag.
+    let tag_start = body[..pos].rfind("<input")?;
+    // Scan forward to the closing `>`.
+    let tag_end = body[pos..].find('>')?;
+    let tag = &body[tag_start..pos + tag_end];
+    extract_attr(tag, "value")
 }
 
 // Anti-bot challenge detector. Aligned with private-core's
@@ -3086,7 +3190,7 @@ fn mcp_tools() -> Value {
     json!([
         {
             "name": "navigate",
-            "description": "Fetch a URL with Chrome-fingerprinted HTTP (rquest, Chrome 131 emulation). Parses HTML, seeds the JS DOM, returns BlockMap inline. With `exec_scripts: true`, extracts inline AND external <script> tags from the parsed HTML, fetches externals in parallel (8s per-fetch timeout), eval's them in document order in QuickJS (with shims for setTimeout/fetch/etc.), then settles the event loop and fires DOMContentLoaded + load. `<script async>` is honored: async scripts execute after the sync queue. When `--policy=blocklist` is set, tracker URLs are blocked at script-fetch time (see scripts.policy_blocked in the result). Returns a `scripts` summary with inline_count, external_count, async_count, policy_blocked, executed, errors.\n\nAuto-extract: when the page embeds JSON-bearing <script> tags (density.json_scripts > 0 — covers application/json, application/ld+json, text/x-magento-init, text/x-shopify-app, etc.), navigate auto-runs `extract()` and returns the result as the `extract` field. Saves a round trip on the common case where the data the JS would have rendered is already sitting in the HTML — JSON-LD article schemas on news sites, __NEXT_DATA__ page state on Next.js apps, json_in_script product blobs on Magento/Shopify, GitHub RSC payloads, etc. Capped at 256 KB inline; over that limit `extract` returns a stub with strategy/confidence/size_bytes/hint and the agent should call `extract()` explicitly to retrieve the full payload. Pages with no embedded JSON get extract:null and pay zero extra cost.",
+            "description": "Fetch a URL with Chrome-fingerprinted HTTP (rquest, Chrome 131 emulation). Parses HTML, seeds the JS DOM, returns BlockMap inline. With `exec_scripts: true`, extracts inline AND external <script> tags from the parsed HTML, fetches externals in parallel (8s per-fetch timeout), eval's them in document order in QuickJS (with shims for setTimeout/fetch/etc.), then settles the event loop and fires DOMContentLoaded + load. `<script async>` is honored: async scripts execute after the sync queue. When `--policy=blocklist` is set, tracker URLs are blocked at script-fetch time (see scripts.policy_blocked in the result). Returns a `scripts` summary with inline_count, external_count, async_count, policy_blocked, executed, errors.\n\nAuto-extract: when the page embeds JSON-bearing <script> tags (density.json_scripts > 0 — covers application/json, application/ld+json, text/x-magento-init, text/x-shopify-app, etc.), navigate auto-runs `extract()` and returns the result as the `extract` field. Saves a round trip on the common case where the data the JS would have rendered is already sitting in the HTML — JSON-LD article schemas on news sites, __NEXT_DATA__ page state on Next.js apps, json_in_script product blobs on Magento/Shopify, GitHub RSC payloads, etc. Capped at 256 KB inline; over that limit `extract` returns a stub with strategy/confidence/size_bytes/hint and the agent should call `extract()` explicitly to retrieve the full payload. Pages with no embedded JSON get extract:null and pay zero extra cost.\n\nAuto-solve: Reddit's JS proof-of-work challenge (provider: reddit_js_challenge) is transparently solved — the challenge is detected, the GET solution URL is computed (solution = hex_value + hex_value), and the real page is returned in one navigate call. challenge:null on the result means the real page was served. Subsequent navigations in the same session carry the clearance cookie and skip the challenge entirely.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -3505,4 +3609,66 @@ async fn mcp_main(profile: Profile) -> Result<()> {
         out.flush()?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const REDDIT_CHALLENGE_HTML: &str = r#"<!DOCTYPE html>
+<html lang="en">
+  <head><title>Reddit - Please wait for verification</title>
+    <script nonce="test-nonce">
+      document.addEventListener("DOMContentLoaded",async function(){var e=document.forms[0],n=(e.onsubmit=function(t){return!0},await(async e=>e+e)("a5be06c2a2c9c99d"));e.elements.namedItem("solution").value=n,e.requestSubmit()},{once:!0});
+    </script>
+  </head>
+  <body>
+    <form hidden method="GET" action="/r/programming/">
+      <input type="hidden" name="solution" />
+      <input type="hidden" name="js_challenge" value="1"/>
+      <input type="hidden" name="token" value="deadbeef1234"/>
+      <input type="hidden" name="jsc_orig_r" value=""/>
+    </form>
+  </body>
+</html>"#;
+
+    #[test]
+    fn test_parse_reddit_js_challenge_basic() {
+        let url =
+            parse_reddit_js_challenge_url(REDDIT_CHALLENGE_HTML, "https://www.reddit.com/r/programming/");
+        assert!(url.is_some(), "should parse the challenge");
+        let url = url.unwrap();
+        assert!(url.contains("solution=a5be06c2a2c9c99da5be06c2a2c9c99d"), "solution should be doubled: {url}");
+        assert!(url.contains("js_challenge=1"), "must include js_challenge flag: {url}");
+        assert!(url.contains("token=deadbeef1234"), "must include token: {url}");
+        assert!(url.starts_with("https://www.reddit.com/r/programming/"), "must resolve relative action: {url}");
+    }
+
+    #[test]
+    fn test_parse_reddit_js_challenge_no_match() {
+        assert!(parse_reddit_js_challenge_url("<html><body>Normal page</body></html>", "https://example.com/").is_none());
+    }
+
+    #[test]
+    fn test_extract_attr_double_quoted() {
+        let tag = r#"<form hidden method="GET" action="/r/foo/">"#;
+        assert_eq!(extract_attr(tag, "action"), Some("/r/foo/".to_string()));
+        assert_eq!(extract_attr(tag, "method"), Some("GET".to_string()));
+    }
+
+    #[test]
+    fn test_extract_hidden_input() {
+        let body = r#"<form><input type="hidden" name="token" value="abc123"/></form>"#;
+        assert_eq!(extract_hidden_input(body, "token"), Some("abc123".to_string()));
+        assert_eq!(extract_hidden_input(body, "missing"), None);
+    }
+
+    #[test]
+    fn test_detect_challenge_reddit() {
+        let result = detect_challenge(200, REDDIT_CHALLENGE_HTML);
+        assert!(result.is_some());
+        let r = result.unwrap();
+        assert_eq!(r["provider"], "reddit_js_challenge");
+        assert!(r["confidence"].as_f64().unwrap() > 0.9);
+    }
 }
