@@ -504,7 +504,7 @@ jobs:
           # No sdist until the source package can build/install the native
           # Rust binary. Publishing a binary-less sdist installs a broken
           # console wrapper on unsupported platforms.
-          cp dist-staging/*/pyunbrowser-*.whl dist/
+          find dist-staging -name 'pyunbrowser-*.whl' -exec cp {} dist/ \;
           ls -la dist/
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
