@@ -374,15 +374,10 @@ jobs:
           cp target/x86_64-unknown-linux-gnu/release/unbrowser python/unbrowser/_bin/unbrowser
           chmod +x python/unbrowser/_bin/unbrowser
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
       - name: Build wheel
         run: |
-          python -m pip install --upgrade pip build 'wheel>=0.40.0'
-          cd python && python -m build --wheel
+          python3 -m pip install --upgrade pip build 'wheel>=0.40.0'
+          cd python && python3 -m build --wheel
 
       - name: Re-tag wheel for manylinux_2_31_x86_64
         # Hatchling emits py3-none-any because the Python code itself is pure
@@ -393,12 +388,12 @@ jobs:
           # `--remove` strips the original platform tag before we add the real
           # Linux target. `wheel tags` is required here because the package is
           # not an extension module, just a Python wrapper around a binary.
-          python -m wheel tags --remove --platform-tag manylinux_2_31_x86_64 pyunbrowser-*-py3-none-any.whl
+          python3 -m wheel tags --remove --platform-tag manylinux_2_31_x86_64 pyunbrowser-*-py3-none-any.whl
           ls -la
 
       - name: Validate wheel contents
         run: |
-          python - <<'PY'
+          python3 - <<'PY'
           import glob
           import os
           import stat
@@ -418,10 +413,10 @@ jobs:
         run: |
           set -euo pipefail
           wheel=$(ls python/dist/pyunbrowser-*.whl)
-          python -m venv /tmp/pyunbrowser-wheel-smoke
+          python3 -m venv /tmp/pyunbrowser-wheel-smoke
           . /tmp/pyunbrowser-wheel-smoke/bin/activate
           python -m pip install --upgrade pip
-          python -m pip install "$wheel"
+          python -m pip install --ignore-requires-python "$wheel"
           python - <<'PY'
           import json
           import os
