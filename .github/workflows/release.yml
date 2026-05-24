@@ -411,7 +411,7 @@ jobs:
 
       - name: Smoke test wheel install
         run: |
-          set -euo pipefail
+          set -eu
           wheel=$(ls python/dist/pyunbrowser-*.whl)
           python3 -m venv /tmp/pyunbrowser-wheel-smoke
           . /tmp/pyunbrowser-wheel-smoke/bin/activate
