@@ -77,8 +77,8 @@ This isn't a Chrome wrapper that an agent uses through a Puppeteer-shaped abstra
 - **Stable element refs** (`e:142`) — query, click, type, submit using opaque handles. The LLM never has to scrape the DOM itself.
 - **`challenge` field on every blocked navigate** — provider, confidence, and the exact clearance cookie name. The agent reacts intelligently instead of guessing.
 - **`density.likely_js_filled` heuristic** — distinguishes "real SSR page" from "SSR shell with JS-filled cells" (the CNBC trap). The agent bails before burning round-trips on a page it can't read.
-- **MCP-native** — `unbrowser --mcp` exposes 12 tools to any MCP host (Claude Code, Claude Desktop, Cursor, Cline). 4 lines of config, zero glue code.
-- **Real Chrome fingerprint** (Chrome 131 JA4 + Akamai H2 hash) so sites don't block you for being a script.
+- **MCP-native** — `unbrowser --mcp` exposes the RPC tool surface to any MCP host (Claude Code, Claude Desktop, Cursor, Cline). 4 lines of config, zero glue code.
+- **Real Chrome fingerprint** (Chrome 134 JA4 + Akamai H2 hash) so sites don't block you for being a script.
 
 For pages that *do* need real Chrome (heavy SPAs, JS-challenge bot walls), the binary detects them and accepts cookies via `cookies_set` — so you solve once in Chrome and replay forever here.
 
@@ -191,7 +191,7 @@ Every navigate's `blockmap.density` field signals SPA-ness so agents bail before
 {"mcpServers":{"unchained":{"command":"unbrowser","args":["--mcp"]}}}
 ```
 
-12 tools auto-discovered by Claude Code, Claude Desktop, Cursor, Cline.
+Tools are auto-discovered by Claude Code, Claude Desktop, Cursor, Cline.
 
 ### Subprocess (custom runtimes)
 
@@ -228,7 +228,7 @@ unbrowser 2> >(python3 scripts/watch.py)
 | `discover {url?, goal?, exec_scripts?, same_origin?, include_network?, limit?, debug?}` | Cheap-first information discovery. Merges DOM routes, inferred form/query URLs, and network JSON routes into one ranked graph with provenance and escalation hints. Defaults to static discovery; set `exec_scripts: true` when fetch-visible routes are insufficient. |
 | `click {ref}` | dispatch click; auto-follows `<a href>` (returns `{status, url, bytes, headers, blockmap, challenge}` — same shape as `navigate`) |
 | `type {ref, text}` | set value + dispatch input/change events |
-| `submit {ref}` | gather GET-form fields + navigate |
+| `submit {ref}` | gather form fields and navigate. Supports GET and `application/x-www-form-urlencoded` POST; multipart is not supported. |
 | `eval {code}` | run JS in embedded QuickJS |
 | `cookies_set / cookies_get / cookies_clear` | session jar |
 | `blockmap` | recompute the page summary |
@@ -265,7 +265,7 @@ The escalation path is a deliberate choice, not an automatic fallback — you sh
 
 - **Script execution is opt-in via `exec_scripts: true`.** Default navigate skips it (the SSR/static path is what most agents want). With it on, inline + external `<script>` tags run in QuickJS — works for many SPAs, but heavy framework bootstraps (Ember, big React) often don't auto-mount because shims can't fake every browser-specific signal. The blockmap's `density.likely_js_filled` flag tells agents in one call when to escalate instead of burning round-trips.
 - **All eval is wall-clock bounded.** A 30s watchdog (configurable via `UNBROWSER_TIMEOUT_MS`, clamped to 1s..10min) covers script execution AND every subsequent settle/microtask/timer callback, so a hostile site can never wedge the binary or strand a CPU-pegged orphan process.
-- **GET-only form submit.** POST/multipart errors out — construct the request manually via `eval` or escalate.
+- **Form submit is intentionally narrow.** GET and `application/x-www-form-urlencoded` POST are supported, including checked checkbox/radio values. Multipart upload forms are not supported — construct the request manually via `eval` or escalate.
 - **Hardest-tier bot detection** (PerimeterX with behavioral telemetry, advanced Akamai BMP, Kasada) needs the cookie-handoff path. The binary detects and labels the challenge for you, but solving it requires real Chrome (or a token vendor).
 - **No screenshots.** Out of scope by design.
 
@@ -285,7 +285,7 @@ cargo build --release
 JSON-RPC stdin ─┐    ┌─ stdout
                 ▼    ▲
          ┌────────────────────┐
-          │  request (Chrome131│   ┌──────────┐    ┌──────────────────┐
+          │  request (Chrome  │   ┌──────────┐    ┌──────────────────┐
           │  TLS+H2 fingerprint)├──▶ html5ever ├───▶ rquickjs +       │
          │                    │   │  parser  │    │  dom.js +        │
          │  cookie_store      │   └──────────┘    │  blockmap.js +   │

@@ -739,7 +739,7 @@ Three reasons this is the right priority:
 Concrete trace through a `cnbc.com` page load under the proposed system:
 
 1. Driver calls `navigate("https://cnbc.com/markets")`.
-2. `rquest` GET returns 626 KB HTML with 47 `<script>` tags.
+2. `wreq` GET returns 626 KB HTML with 47 `<script>` tags.
 3. HTML parsed by html5ever, VDOM seeded.
 4. Script filter (Phase D) consults priors:
    - 31 scripts match analytics/ad blocklist → skipped (strong structural prior)

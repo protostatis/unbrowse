@@ -37,7 +37,7 @@ with Client() as ub:
 - **`navigate(url)`** — fetch, parse, return `{status, url, bytes, headers, blockmap, challenge}`. With `exec_scripts=True`, runs page JS in QuickJS (bounded by a 30s watchdog so it can't wedge).
 - **`query(selector)`** — CSS query → `[{ref, tag, attrs, text}]`. Refs are stable handles for click/type/submit.
 - **`extract()`** — auto-strategy structured data: tries JSON-LD → `__NEXT_DATA__` → Nuxt → OpenGraph → microdata → text fallback, returns highest-confidence hit.
-- **`click(ref)` / `type(ref, text)` / `submit(ref)`** — interaction. POST and GET forms supported. Checkboxes/radios tracked.
+- **`click(ref)` / `type(ref, text)` / `submit(ref)`** — interaction. GET and `application/x-www-form-urlencoded` POST forms supported; multipart is not yet supported. Checked checkbox/radio values are serialized.
 - **`cookies_set(...)`** — paste cookies from a real Chrome session to bypass bot detection (Cloudflare, PerimeterX, Datadome). Solve once, replay forever.
 
 Full RPC reference, BlockMap shape, challenge detection, profile system, and architecture: [github.com/protostatis/unbrowser](https://github.com/protostatis/unbrowser).

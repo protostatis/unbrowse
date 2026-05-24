@@ -17,7 +17,8 @@ It is intentionally separate from `skills/unbrowser/SKILL.md`, which is user-fac
 2. Commit and push to `main`.
 3. Tag the release: `git tag -a vX.Y.Z -m "..." && git push origin vX.Y.Z`.
 4. The `release.yml` workflow builds the binaries, creates the GitHub Release,
-   and publishes Python wheels + sdist to PyPI via OIDC trusted publishing.
+   and publishes Python wheels to PyPI via OIDC trusted publishing. It does
+   not publish an sdist until source installs can build the native binary.
 
 ## crates.io
 

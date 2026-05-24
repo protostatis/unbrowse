@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote_plus, urljoin, urlparse
 
-__version__ = "0.0.11"
+__version__ = "0.0.12"
 
 __all__ = ["Client", "UnbrowserError", "find_binary", "navigate", "__version__"]
 
@@ -57,29 +57,29 @@ def find_binary() -> str:
     """
     env = os.environ.get("UNBROWSER_BIN")
     if env:
-        if not Path(env).is_file():
-            raise UnbrowserError(
-                f"UNBROWSER_BIN points to {env!r}, which doesn't exist"
-            )
-        return env
+        return _checked_binary(Path(env), "UNBROWSER_BIN")
 
     bundled = Path(__file__).parent / "_bin" / _binary_name()
     if bundled.is_file():
-        return str(bundled)
+        return _checked_binary(bundled, "bundled binary")
 
-    on_path = shutil.which("unbrowser")
-    if on_path:
-        return on_path
-
-    # Dev fallback: target/debug/unbrowser two dirs up from this file
+    # Dev fallback before PATH: source checkouts commonly have the Python
+    # package importable without an installed wheel, while PATH may contain the
+    # pip-generated `unbrowser` console wrapper. Prefer the real local binary.
     # (python/unbrowser/__init__.py -> python/unbrowser -> python -> repo root).
     dev = Path(__file__).resolve().parents[2] / "target" / "debug" / "unbrowser"
     if dev.is_file():
-        return str(dev)
+        return _checked_binary(dev, "target/debug/unbrowser")
+
+    on_path = shutil.which("unbrowser")
+    if on_path:
+        path_binary = Path(on_path)
+        if not _looks_like_python_wrapper(path_binary):
+            return _checked_binary(path_binary, "$PATH unbrowser")
 
     raise UnbrowserError(
         "Could not locate the unbrowser binary. Tried: $UNBROWSER_BIN, "
-        "package-bundled binary, $PATH, target/debug/unbrowser. "
+        "package-bundled binary, target/debug/unbrowser, $PATH. "
         "Install via `pip install pyunbrowser` (PyPI distribution; ships the binary), "
         "`cargo install unbrowser`, or `brew install unbrowser`."
     )
@@ -87,6 +87,27 @@ def find_binary() -> str:
 
 def _binary_name() -> str:
     return "unbrowser.exe" if sys.platform == "win32" else "unbrowser"
+
+
+def _checked_binary(path: Path, source: str) -> str:
+    if not path.is_file():
+        raise UnbrowserError(f"{source} points to {str(path)!r}, which doesn't exist")
+    if os.name != "nt" and not os.access(path, os.X_OK):
+        raise UnbrowserError(
+            f"{source} points to {str(path)!r}, which is not executable"
+        )
+    return str(path)
+
+
+def _looks_like_python_wrapper(path: Path) -> bool:
+    try:
+        head = path.read_bytes()[:4096]
+    except OSError:
+        return False
+    if b"unbrowser._cli" in head:
+        return True
+    first = head.splitlines()[0] if head else b""
+    return first.startswith(b"#!") and b"python" in first.lower() and b"unbrowser" in head
 
 
 class Client:
@@ -97,14 +118,20 @@ class Client:
     """
 
     def __init__(self, binary: str | None = None):
-        self._proc = subprocess.Popen(
-            [binary or find_binary()],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            bufsize=1,
-        )
+        binary_path = binary or find_binary()
+        try:
+            self._proc = subprocess.Popen(
+                [binary_path],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                bufsize=1,
+            )
+        except OSError as e:
+            raise UnbrowserError(
+                f"failed to spawn unbrowser binary {binary_path!r}: {e}"
+            ) from e
         self._next_id = 0
         self._closed = False
         # Track the last successful navigate URL Python-side so make_absolute_url

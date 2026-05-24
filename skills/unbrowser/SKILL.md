@@ -75,7 +75,7 @@ Do not retry `unbrowser` on these. Hand off to the managed browser:
 - **`blockmap.density.likely_js_filled === true`.** SSR shell with empty `<table>`/`<td>`/`<li>` slots that get filled by post-load JS the agent can't easily simulate (the CNBC pattern). Prefer `script[type=application/json]` extraction first; if there's no usable JSON store, escalate.
 - Pages that require **canvas/WebGL/audio rendering**, **actual click coordinates**, **screenshot OCR**, or **password manager / 2FA UI**. `unbrowser` doesn't render.
 - **Drag/drop, hover-only menus, intersection-observer infinite scroll, real keystroke timing under fingerprinting.** v1 has no inter-key jitter or scroll easing.
-- **POST forms, multipart uploads.** v1 `submit` is GET-only.
+- **Multipart uploads.** `submit` supports GET and `application/x-www-form-urlencoded` POST only; multipart upload forms require escalation.
 - **Heavy JIT-bound JS** (Google Sheets, Figma, Notion editor). QuickJS is 20–50× slower than V8 — the page may technically run but settle times will be unworkable.
 - **Login flows that require interactive auth.** Use the managed browser to log in once. Cookies exported from that session can be replayed via `cookies_set` **for the same site only** — see [Operational safety](#operational-safety) for the rules around cookie reuse.
 
@@ -222,7 +222,7 @@ No data is sent anywhere except the target URL. The binary is stateless across s
 
 ## Limits and known gaps
 
-- v1 `submit` is **GET-only**. POST and multipart will error.
+- `submit` supports GET and `application/x-www-form-urlencoded` POST. Multipart upload forms will error.
 - v1 `type` has **no inter-key timing jitter** — keystrokes are dispatched instantly. Sites that fingerprint typing rhythm will flag this.
 - QuickJS is **20–50× slower** than V8 on JIT-heavy code. Heavy SPAs may settle slowly or not at all.
 - Selector engine does not yet support `:not()`, `:has()`, or `An+B` formulas in `:nth-*`.

@@ -5,7 +5,7 @@
 # codebase.
 
 name = "chrome_134"
-emulation = "chrome_134"  # rquest_util::Emulation enum value (serde-deserializable)
+emulation = "chrome_134"  # wreq_util::Emulation enum value (serde-deserializable)
 
 user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36"
 accept_language = "en-US,en;q=0.9"

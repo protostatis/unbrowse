@@ -198,7 +198,7 @@ fn build_cookie(item: &Value, default_url: Option<&str>) -> Result<(String, Stri
 
 // =============================================================================
 // Fetch worker — lets page-script `fetch()` calls go through the same
-// wreq::Client we use for navigate (so cookies + Chrome 131 TLS fingerprint
+// wreq::Client we use for navigate (so cookies + Chrome profile TLS fingerprint
 // stay coherent). One dedicated thread, one current_thread tokio runtime,
 // requests serialized through an mpsc channel. Responses queue into a shared
 // Mutex<Vec<...>> that JS drains via __host_drain_fetches() during settle().
@@ -531,7 +531,7 @@ impl Session {
         // Install JS layers in order:
         //   1. dom.js     — document, Element, querySelector, __seedDOM, etc.
         //   2. shims.js   — passive browser globals (window, navigator, location,
-        //                   storage, etc.) — coherent with our Chrome 131 TLS FP
+        //                   storage, etc.) — coherent with our Chrome profile TLS FP
         //   3. blockmap.js — __blockmap() page-summary walker
         //   4. interact.js — __click, __type, __byRef, __formData
         //   5. extract.js  — text/list/card helpers
@@ -5886,7 +5886,7 @@ fn mcp_tools() -> Value {
     json!([
         {
             "name": "navigate",
-            "description": "Fetch a URL with Chrome-fingerprinted HTTP (request, Chrome 131 emulation). Parses HTML, seeds the JS DOM, returns BlockMap inline. With `exec_scripts: true`, extracts inline AND external <script> tags from the parsed HTML, fetches externals in parallel (8s per-fetch timeout), eval's them in document order in QuickJS (with shims for setTimeout/fetch/etc.), then settles the event loop and fires DOMContentLoaded + load. `<script async>` is honored: async scripts execute after the sync queue. When `--policy=blocklist` is set, tracker URLs are blocked at script-fetch time (see scripts.policy_blocked in the result). Returns a `scripts` summary with inline_count, external_count, async_count, policy_blocked, executed, errors.\n\nAuto-extract: when the page embeds JSON-bearing <script> tags (density.json_scripts > 0 — covers application/json, application/ld+json, text/x-magento-init, text/x-shopify-app, etc.), navigate auto-runs `extract()` and returns the result as the `extract` field. Saves a round trip on the common case where the data the JS would have rendered is already sitting in the HTML — JSON-LD article schemas on news sites, __NEXT_DATA__ page state on Next.js apps, json_in_script product blobs on Magento/Shopify, GitHub RSC payloads, etc. Capped at 256 KB inline; over that limit `extract` returns a stub with strategy/confidence/size_bytes/hint and the agent should call `extract()` explicitly to retrieve the full payload. Pages with no embedded JSON get extract:null and pay zero extra cost.\n\nTool advice: navigate also returns `tool_likelihoods` plus `tool_recommendations`, derived from concrete page signals (structure/headings, selector hints, density, embedded data, network captures, challenge state, and script pathology) so agents can pick the next tool without guessing.\n\nAuto-solve: Reddit's JS proof-of-work challenge (provider: reddit_js_challenge) is transparently solved — the challenge is detected, the GET solution URL is computed (solution = hex_value + hex_value), and the real page is returned in one navigate call. challenge:null on the result means the real page was served. Subsequent navigations in the same session carry the clearance cookie and skip the challenge entirely.",
+            "description": "Fetch a URL with Chrome-fingerprinted HTTP using the active profile. Parses HTML, seeds the JS DOM, returns BlockMap inline. With `exec_scripts: true`, extracts inline AND external <script> tags from the parsed HTML, fetches externals in parallel (8s per-fetch timeout), eval's them in document order in QuickJS (with shims for setTimeout/fetch/etc.), then settles the event loop and fires DOMContentLoaded + load. `<script async>` is honored: async scripts execute after the sync queue. When `--policy=blocklist` is set, tracker URLs are blocked at script-fetch time (see scripts.policy_blocked in the result). Returns a `scripts` summary with inline_count, external_count, async_count, policy_blocked, executed, errors.\n\nAuto-extract: when the page embeds JSON-bearing <script> tags (density.json_scripts > 0 — covers application/json, application/ld+json, text/x-magento-init, text/x-shopify-app, etc.), navigate auto-runs `extract()` and returns the result as the `extract` field. Saves a round trip on the common case where the data the JS would have rendered is already sitting in the HTML — JSON-LD article schemas on news sites, __NEXT_DATA__ page state on Next.js apps, json_in_script product blobs on Magento/Shopify, GitHub RSC payloads, etc. Capped at 256 KB inline; over that limit `extract` returns a stub with strategy/confidence/size_bytes/hint and the agent should call `extract()` explicitly to retrieve the full payload. Pages with no embedded JSON get extract:null and pay zero extra cost.\n\nTool advice: navigate also returns `tool_likelihoods` plus `tool_recommendations`, derived from concrete page signals (structure/headings, selector hints, density, embedded data, network captures, challenge state, and script pathology) so agents can pick the next tool without guessing.\n\nAuto-solve: Reddit's JS proof-of-work challenge (provider: reddit_js_challenge) is transparently solved — the challenge is detected, the GET solution URL is computed (solution = hex_value + hex_value), and the real page is returned in one navigate call. challenge:null on the result means the real page was served. Subsequent navigations in the same session carry the clearance cookie and skip the challenge entirely.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -6120,7 +6120,7 @@ fn mcp_tools() -> Value {
         },
         {
             "name": "submit",
-            "description": "Submit a form by gathering its input/textarea/select values, building a query string, and navigating to the resolved action URL. v1 supports GET only; POST/multipart errors out. Skips checkboxes/radios.",
+            "description": "Submit a form by gathering input/textarea/select values and navigating to the resolved action URL. Supports GET and application/x-www-form-urlencoded POST. Checked checkbox/radio values are serialized; multipart upload forms are not supported.",
             "inputSchema": {
                 "type": "object",
                 "properties": { "ref": { "type": "string", "description": "Form element ref like e:142" } },

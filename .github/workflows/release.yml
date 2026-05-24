@@ -20,8 +20,47 @@ permissions:
   contents: write
 
 jobs:
+  preflight:
+    name: Release preflight
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
+
+      - name: Verify tag and package versions
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import pathlib
+          import re
+          import sys
+          import tomllib
+
+          tag = os.environ["RELEASE_TAG"]
+          if not re.fullmatch(r"v\d+\.\d+\.\d+", tag):
+              raise SystemExit(f"release tag must look like vX.Y.Z, got {tag!r}")
+          version = tag[1:]
+
+          cargo = tomllib.loads(pathlib.Path("Cargo.toml").read_text())["package"]["version"]
+          pyproject = tomllib.loads(pathlib.Path("python/pyproject.toml").read_text())["project"]["version"]
+          init = pathlib.Path("python/unbrowser/__init__.py").read_text()
+          match = re.search(r'^__version__ = "([^"]+)"', init, re.M)
+          if not match:
+              raise SystemExit("python/unbrowser/__init__.py has no __version__")
+          module = match.group(1)
+
+          versions = {"tag": version, "Cargo.toml": cargo, "pyproject.toml": pyproject, "__version__": module}
+          if len(set(versions.values())) != 1:
+              raise SystemExit("version mismatch: " + repr(versions))
+          print("release version", version)
+          PY
+
   build:
     name: Build ${{ matrix.target }}
+    needs: preflight
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -44,6 +83,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -55,7 +96,7 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
-      # rquest pulls in boring-sys2 (BoringSSL) which needs cmake + ninja.
+      # wreq pulls in boring-sys2 (BoringSSL) which needs cmake + ninja.
       - name: Install build deps (macOS)
         if: runner.os == 'macOS'
         run: |
@@ -77,15 +118,15 @@ jobs:
       - name: Build release binary
         run: cargo build --release --target ${{ matrix.target }}
 
+      - name: Install Rosetta for Intel macOS smoke
+        if: runner.os == 'macOS' && matrix.target == 'x86_64-apple-darwin'
+        run: softwareupdate --install-rosetta --agree-to-license || true
+
       - name: Smoke test (Unix)
         if: runner.os != 'Windows'
         run: |
           # Verify the binary at least starts and accepts a `close` command.
-          # Native runs only — skip when host arch != target arch.
-          if [ "${{ matrix.target }}" = "x86_64-apple-darwin" ] && [ "$(uname -m)" = "arm64" ]; then
-            echo "skip: cross-compiled binary, host can't run it"
-            exit 0
-          fi
+          # Intel macOS runs under Rosetta on the arm64 macOS runner.
           if [ "${{ matrix.target }}" = "aarch64-apple-darwin" ] && [ "$(uname -m)" = "x86_64" ]; then
             echo "skip: cross-compiled binary, host can't run it"
             exit 0
@@ -134,6 +175,134 @@ jobs:
           python -m wheel tags --remove --platform-tag ${{ matrix.wheel_platform }} pyunbrowser-*-py3-none-any.whl
           ls -la
 
+      - name: Validate wheel contents
+        run: |
+          python - <<'PY'
+          import glob
+          import os
+          import stat
+          import zipfile
+
+          wheels = glob.glob("python/dist/pyunbrowser-*.whl")
+          assert len(wheels) == 1, wheels
+          with zipfile.ZipFile(wheels[0]) as z:
+              names = set(z.namelist())
+              assert "unbrowser/_bin/unbrowser" in names, sorted(names)
+              mode = z.getinfo("unbrowser/_bin/unbrowser").external_attr >> 16
+              assert mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH), oct(mode)
+          print(wheels[0])
+          PY
+
+      - name: Smoke test wheel install
+        run: |
+          set -euo pipefail
+          wheel=$(ls python/dist/pyunbrowser-*.whl)
+          if [ "${{ matrix.target }}" = "x86_64-apple-darwin" ] && [ "$(uname -m)" = "arm64" ]; then
+            # pip cannot install an x86_64-tagged wheel into an arm64 venv, but
+            # it can unpack it for that target. Then the pure-Python wrapper can
+            # run on arm64 Python while spawning the bundled x86_64 binary under
+            # Rosetta, which validates the wheel payload before publish.
+            rm -rf /tmp/pyunbrowser-wheel-smoke
+            mkdir -p /tmp/pyunbrowser-wheel-smoke
+            python -m pip install --upgrade pip
+            python -m pip install \
+              --target /tmp/pyunbrowser-wheel-smoke \
+              --platform ${{ matrix.wheel_platform }} \
+              --implementation py \
+              --python-version 311 \
+              --abi none \
+              --only-binary=:all: \
+              --no-deps \
+              "$wheel"
+            PYTHONPATH=/tmp/pyunbrowser-wheel-smoke python - <<'PY'
+          import json
+          import os
+          import subprocess
+          import unbrowser
+
+          path = unbrowser.find_binary()
+          assert os.path.isfile(path), path
+          print(unbrowser.__version__, path)
+
+          out = subprocess.check_output(
+              [path],
+              input='{"id":1,"method":"close","params":{}}\n',
+              text=True,
+          )
+          assert '"result":"bye"' in out, out
+
+          proc = subprocess.Popen(
+              [path, "--mcp"],
+              stdin=subprocess.PIPE,
+              stdout=subprocess.PIPE,
+              stderr=subprocess.DEVNULL,
+              text=True,
+          )
+          assert proc.stdin is not None and proc.stdout is not None
+          proc.stdin.write(json.dumps({
+              "jsonrpc": "2.0",
+              "id": 1,
+              "method": "initialize",
+              "params": {
+                  "protocolVersion": "2024-11-05",
+                  "capabilities": {},
+                  "clientInfo": {"name": "release-smoke", "version": "0"},
+              },
+          }) + "\n")
+          proc.stdin.flush()
+          line = proc.stdout.readline()
+          assert '"id":1' in line and '"result"' in line, line
+          proc.stdin.close()
+          proc.wait(timeout=5)
+          PY
+            exit 0
+          fi
+          python -m venv /tmp/pyunbrowser-wheel-smoke
+          . /tmp/pyunbrowser-wheel-smoke/bin/activate
+          python -m pip install --upgrade pip
+          python -m pip install "$wheel"
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+          import unbrowser
+
+          path = unbrowser.find_binary()
+          assert os.path.isfile(path), path
+          print(unbrowser.__version__, path)
+
+          out = subprocess.check_output(
+              [path],
+              input='{"id":1,"method":"close","params":{}}\n',
+              text=True,
+          )
+          assert '"result":"bye"' in out, out
+
+          proc = subprocess.Popen(
+              ["unbrowser", "--mcp"],
+              stdin=subprocess.PIPE,
+              stdout=subprocess.PIPE,
+              stderr=subprocess.DEVNULL,
+              text=True,
+          )
+          assert proc.stdin is not None and proc.stdout is not None
+          proc.stdin.write(json.dumps({
+              "jsonrpc": "2.0",
+              "id": 1,
+              "method": "initialize",
+              "params": {
+                  "protocolVersion": "2024-11-05",
+                  "capabilities": {},
+                  "clientInfo": {"name": "release-smoke", "version": "0"},
+              },
+          }) + "\n")
+          proc.stdin.flush()
+          line = proc.stdout.readline()
+          assert '"id":1' in line and '"result"' in line, line
+          proc.stdin.close()
+          proc.wait(timeout=5)
+          PY
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -147,10 +316,13 @@ jobs:
 
   build-x86_64-unknown-linux-gnu:
     name: Build x86_64-unknown-linux-gnu
+    needs: preflight
     runs-on: ubuntu-latest
     container: ubuntu:20.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
 
       - name: Install build deps
         run: |
@@ -202,10 +374,15 @@ jobs:
           cp target/x86_64-unknown-linux-gnu/release/unbrowser python/unbrowser/_bin/unbrowser
           chmod +x python/unbrowser/_bin/unbrowser
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
       - name: Build wheel
         run: |
-          python3 -m pip install --upgrade pip build 'wheel>=0.40.0'
-          cd python && python3 -m build --wheel
+          python -m pip install --upgrade pip build 'wheel>=0.40.0'
+          cd python && python -m build --wheel
 
       - name: Re-tag wheel for manylinux_2_31_x86_64
         # Hatchling emits py3-none-any because the Python code itself is pure
@@ -216,8 +393,76 @@ jobs:
           # `--remove` strips the original platform tag before we add the real
           # Linux target. `wheel tags` is required here because the package is
           # not an extension module, just a Python wrapper around a binary.
-          python3 -m wheel tags --remove --platform-tag manylinux_2_31_x86_64 pyunbrowser-*-py3-none-any.whl
+          python -m wheel tags --remove --platform-tag manylinux_2_31_x86_64 pyunbrowser-*-py3-none-any.whl
           ls -la
+
+      - name: Validate wheel contents
+        run: |
+          python - <<'PY'
+          import glob
+          import os
+          import stat
+          import zipfile
+
+          wheels = glob.glob("python/dist/pyunbrowser-*.whl")
+          assert len(wheels) == 1, wheels
+          with zipfile.ZipFile(wheels[0]) as z:
+              names = set(z.namelist())
+              assert "unbrowser/_bin/unbrowser" in names, sorted(names)
+              mode = z.getinfo("unbrowser/_bin/unbrowser").external_attr >> 16
+              assert mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH), oct(mode)
+          print(wheels[0])
+          PY
+
+      - name: Smoke test wheel install
+        run: |
+          set -euo pipefail
+          wheel=$(ls python/dist/pyunbrowser-*.whl)
+          python -m venv /tmp/pyunbrowser-wheel-smoke
+          . /tmp/pyunbrowser-wheel-smoke/bin/activate
+          python -m pip install --upgrade pip
+          python -m pip install "$wheel"
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+          import unbrowser
+
+          path = unbrowser.find_binary()
+          assert os.path.isfile(path), path
+          print(unbrowser.__version__, path)
+
+          out = subprocess.check_output(
+              [path],
+              input='{"id":1,"method":"close","params":{}}\n',
+              text=True,
+          )
+          assert '"result":"bye"' in out, out
+
+          proc = subprocess.Popen(
+              ["unbrowser", "--mcp"],
+              stdin=subprocess.PIPE,
+              stdout=subprocess.PIPE,
+              stderr=subprocess.DEVNULL,
+              text=True,
+          )
+          assert proc.stdin is not None and proc.stdout is not None
+          proc.stdin.write(json.dumps({
+              "jsonrpc": "2.0",
+              "id": 1,
+              "method": "initialize",
+              "params": {
+                  "protocolVersion": "2024-11-05",
+                  "capabilities": {},
+                  "clientInfo": {"name": "release-smoke", "version": "0"},
+              },
+          }) + "\n")
+          proc.stdin.flush()
+          line = proc.stdout.readline()
+          assert '"id":1' in line and '"result"' in line, line
+          proc.stdin.close()
+          proc.wait(timeout=5)
+          PY
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -230,32 +475,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  # Source distribution. Platform-neutral, no binary inside — lets users
-  # on platforms we don't ship a wheel for build from source themselves
-  # (and PyPI strongly prefers an sdist alongside any binary wheels).
-  build-sdist:
-    name: Build sdist
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - name: Build sdist
-        run: |
-          python -m pip install --upgrade pip build
-          cd python && python -m build --sdist
-          ls -la dist/
-      - name: Upload sdist artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: pyunbrowser-sdist
-          path: python/dist/pyunbrowser-*.tar.gz
-          if-no-files-found: error
-          retention-days: 7
-
-  # Publish wheels (one per platform from `build`) + sdist to PyPI via
+  # Publish wheels (one per platform from `build`) to PyPI via
   # OIDC trusted publishing — no PYPI_API_TOKEN secret to manage. Requires
   # the user to configure a Trusted Publisher on PyPI for this repo +
   # workflow + environment ONCE before the first tag push:
@@ -267,7 +487,7 @@ jobs:
   #   Environment name: pypi   (must match the `environment:` field below)
   publish-pypi:
     name: Publish to PyPI
-    needs: [build, build-x86_64-unknown-linux-gnu, build-sdist]
+    needs: [build, build-x86_64-unknown-linux-gnu]
     runs-on: ubuntu-latest
     # Publish on tag pushes and explicit manual release dispatches.
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
@@ -277,7 +497,7 @@ jobs:
       name: pypi
       url: https://pypi.org/p/pyunbrowser
     steps:
-      - name: Download all wheel + sdist artifacts
+      - name: Download all wheel artifacts
         uses: actions/download-artifact@v4
         with:
           path: dist-staging
@@ -286,11 +506,10 @@ jobs:
         # into a single dist/ that gh-action-pypi-publish expects.
         run: |
           mkdir -p dist
-          # The PyPI distribution prefix is `pyunbrowser-*` (Python wheels +
-          # sdist); the native binary tarballs are `unbrowser-*-{target}.tar.gz`.
-          # Different prefixes mean a single find each — no exclusions needed.
-          find dist-staging -name 'pyunbrowser-*.whl' -exec cp {} dist/ \;
-          find dist-staging -name 'pyunbrowser-*.tar.gz' -exec cp {} dist/ \;
+          # No sdist until the source package can build/install the native
+          # Rust binary. Publishing a binary-less sdist installs a broken
+          # console wrapper on unsupported platforms.
+          cp dist-staging/*/pyunbrowser-*.whl dist/
           ls -la dist/
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
@@ -304,6 +523,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
           fetch-depth: 0   # full history so generate_release_notes works
 
       - name: Download all artifacts

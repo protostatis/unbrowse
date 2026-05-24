@@ -123,9 +123,10 @@ For tagging a new binary release:
    exists).
 2. Commit. Push to main.
 3. `git tag -a vX.Y.Z -m "..."` and `git push origin vX.Y.Z`.
-4. The `release.yml` workflow runs on tag push: builds 3 platform
-    binaries, creates the GitHub Release with tarballs + sha256s,
-    publishes wheels + sdist to PyPI via OIDC trusted publishing.
+4. The `release.yml` workflow runs on tag push: builds platform binaries,
+     creates the GitHub Release with tarballs + sha256s, and publishes wheels
+     to PyPI via OIDC trusted publishing. It does not publish an sdist until
+     source installs can build the native binary.
 5. Wait ~1-2 minutes for PyPI CDN to propagate
     (`https://pypi.org/pypi/pyunbrowser/<version>/json`).
 
