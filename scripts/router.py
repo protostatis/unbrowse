@@ -224,6 +224,10 @@ class Router:
             self._proc.wait(timeout=2)
         except subprocess.TimeoutExpired:
             self._proc.kill()
+            try:
+                self._proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                pass
         self._stop_cookie_service()
 
     def __enter__(self) -> "Router":
@@ -375,6 +379,10 @@ class Router:
             proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
             proc.kill()
+            try:
+                proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                pass
 
 
 # =============================================================================

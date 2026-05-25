@@ -32,7 +32,7 @@ Usage:
   unbrowser session prune
   unbrowser navigate <url> [--exec-scripts] [--json] [--events] [--shims stable|enhanced]
   unbrowser router <url> [--cookie-service <url>] [--allow-remote-cookie-service] [--no-auto-cookie-service]
-  unbrowser cookie-service [--headless|--no-headless] [--port <port>] [--allow-host <host>]
+  unbrowser cookie-service [--headless|--no-headless] [--port <port>] [--allow-host <host>] [--allow-remote-bind]
   unbrowser policy-check <url> [<url>...]
   unbrowser --list-profiles
   unbrowser --prefit-info

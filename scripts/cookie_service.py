@@ -70,6 +70,7 @@ class Config:
     providers: list[str] = field(default_factory=lambda: list(DEFAULT_PROVIDERS))
     allow_hosts: list[str] = field(default_factory=list)
     block_private_network: bool = True
+    allow_remote_bind: bool = False
     verbose: bool = True
 
 
@@ -92,7 +93,7 @@ class CookieSolver:
             "providers": self.cfg.providers,
             "cookie_export": True,
             "requires_user_browser": True,
-            "local_only": self.cfg.host in ("127.0.0.1", "localhost", "::1"),
+            "local_only": _is_loopback_bind_host(self.cfg.host),
             "headless": self.cfg.headless,
             "stealth": self.cfg.stealth or self.cfg.headless,
             "cdp_port": self.cfg.cdp_port,
@@ -248,7 +249,7 @@ class CookieSolver:
             str(max(1, int(timeout))),
         ]
         try:
-            subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+            subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 5.0)
         except subprocess.TimeoutExpired as exc:
             raise SolveError("unchained wait timed out") from exc
 
@@ -454,6 +455,16 @@ def _is_private_or_reserved_host(host: str) -> bool:
     return False
 
 
+def _is_loopback_bind_host(host: str) -> bool:
+    h = (host or "").strip().strip("[]").rstrip(".").lower()
+    if h == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(h).is_loopback
+    except ValueError:
+        return False
+
+
 def _bounded_timeout(deadline: float, preferred: float) -> float:
     remaining = deadline - time.time()
     if remaining <= 0:
@@ -492,6 +503,7 @@ def parse_args() -> Config:
     p.add_argument("--providers", default=",".join(DEFAULT_PROVIDERS), help="Comma-separated supported challenge providers")
     p.add_argument("--allow-host", action="append", default=[], help="Restrict solves to this host or suffix; repeatable")
     p.add_argument("--allow-private-network", action="store_true", help="Allow private/reserved hosts when no --allow-host is configured")
+    p.add_argument("--allow-remote-bind", action="store_true", help="Allow binding outside loopback; unsafe without network-level auth")
     p.add_argument("--quiet", action="store_true")
     a = p.parse_args()
     return Config(
@@ -512,6 +524,7 @@ def parse_args() -> Config:
         providers=[x.strip() for x in a.providers.split(",") if x.strip()],
         allow_hosts=_validate_allow_hosts(a.allow_host),
         block_private_network=not a.allow_private_network,
+        allow_remote_bind=a.allow_remote_bind,
         verbose=not a.quiet,
         max_queue=a.max_queue,
         request_timeout=a.request_timeout,
@@ -527,6 +540,13 @@ def _env_bool(name: str, default: bool) -> bool:
 
 def main() -> int:
     cfg = parse_args()
+    if not cfg.allow_remote_bind and not _is_loopback_bind_host(cfg.host):
+        sys.stderr.write(
+            "[cookie-service] refusing non-loopback bind; pass "
+            "--allow-remote-bind to acknowledge that /solve is unauthenticated "
+            "and can return browser cookies\n"
+        )
+        return 2
     if shutil.which(cfg.unchained) is None:
         sys.stderr.write(f"[cookie-service] unchained binary not found: {cfg.unchained}\n")
         return 2

@@ -22,7 +22,7 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "scripts"))
 
 from router import Router, RouterConfig, RouterError, _is_loopback_service_url  # noqa: E402
-from cookie_service import SolveError, _is_private_or_reserved_host, _validate_allow_hosts  # noqa: E402
+from cookie_service import SolveError, _is_loopback_bind_host, _is_private_or_reserved_host, _validate_allow_hosts  # noqa: E402
 
 
 BIN = REPO / "target" / "debug" / "unbrowser"
@@ -146,6 +146,8 @@ def main() -> int:
     ok &= check("router rejects remote cookie service by default", remote_service_rejected)
     ok &= check("localhost is private by default", _is_private_or_reserved_host("localhost"))
     ok &= check("loopback is private by default", _is_private_or_reserved_host("127.0.0.1"))
+    ok &= check("loopback bind hosts are allowed", all(_is_loopback_bind_host(h) for h in ("localhost", "127.0.0.1", "::1")))
+    ok &= check("wildcard bind hosts are rejected", not any(_is_loopback_bind_host(h) for h in ("", "0.0.0.0", "::")))
     ok &= check("loopback allow-host is accepted", _validate_allow_hosts(["127.0.0.1"]) == ["127.0.0.1"])
     try:
         _validate_allow_hosts(["com"])
@@ -153,6 +155,14 @@ def main() -> int:
     except SolveError:
         broad_rejected = True
     ok &= check("broad allow-host is rejected", broad_rejected)
+
+    reject_remote = subprocess.run(
+        [sys.executable, str(REPO / "scripts" / "cookie_service.py"), "--host", "0.0.0.0", "--quiet"],
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    ok &= check("remote bind requires explicit opt-in", reject_remote.returncode == 2 and "refusing non-loopback bind" in reject_remote.stderr)
 
     if not BIN.exists():
         print(f"SKIP: missing debug binary at {BIN}; run cargo build")
@@ -235,6 +245,7 @@ def main() -> int:
             service.communicate(timeout=5)
         except subprocess.TimeoutExpired:
             service.kill()
+            service.wait(timeout=5)
         subprocess.run(["unchained", "--port", str(cdp_port), "kill"], capture_output=True, timeout=10)
         httpd.shutdown()
         httpd.server_close()
