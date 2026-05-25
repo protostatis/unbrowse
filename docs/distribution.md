@@ -10,18 +10,19 @@ Breadcrumb name: `unbrowser by Unchained`
 
 ## Submission Status
 
-Updated: 2026-05-24
+Updated: 2026-05-25
 
 Done:
 
 - `mcp.so`: submission issue opened at `https://github.com/chatmcp/mcpso/issues/2500`.
 - `mcpservers.org`: free submission completed with contact email `protostatis.dev@gmail.com`; site reported successful submission and review within 12 hours.
-- Glama: accepted and public at `https://glama.ai/mcp/servers/protostatis/unbrowser`.
+- Glama: accepted, claimed, author-verified, and released at `https://glama.ai/mcp/servers/protostatis/unbrowser`.
 - `punkpeye/awesome-mcp-servers`: PR opened at `https://github.com/punkpeye/awesome-mcp-servers/pull/6860`; Glama badge added and checks passing.
 - `ComposioHQ/awesome-claude-skills`: PR opened at `https://github.com/ComposioHQ/awesome-claude-skills/pull/908`; checks passing after switching to a README-only external listing.
 
 Pending or blocked:
 
+- `mcpservers.org`: public listing not yet visible after submission.
 - `appcypher/awesome-mcp-servers`: branch pushed to `https://github.com/protostatis/awesome-mcp-servers/tree/add-unbrowser`; `gh pr create` failed with `CreatePullRequest` permissions. Manual compare URL: `https://github.com/appcypher/awesome-mcp-servers/compare/main...protostatis:add-unbrowser`.
 - Smithery: not submitted yet; do after basic directory/listing links are live.
 
@@ -91,6 +92,27 @@ Category targets: `Browser Automation`, `Search`, `Web Scraping`, `Developer Too
 Listing title: `unbrowser by Unchained`
 
 Description: use the short description above.
+
+Status: public listing claimed and author-verified. Glama release `v0.1.0` published from commit `eff1674a7bd7ee466aedc1a50eda038f8eb2c908`; build test `019e60ce-e898-72da-a185-c208894d6061` succeeded and initialized `unbrowser` `0.0.13` through `mcp-proxy`.
+
+Glama build settings:
+
+```json
+{
+  "baseImage": "debian:trixie-slim",
+  "pythonVersion": "3.14",
+  "nodeVersion": "26",
+  "buildSteps": [
+    "uv venv /opt/unbrowser --python 3.14 && VIRTUAL_ENV=/opt/unbrowser uv pip install pyunbrowser==0.0.13"
+  ],
+  "cmdArguments": [
+    "/opt/unbrowser/bin/unbrowser",
+    "--mcp"
+  ]
+}
+```
+
+Note: Glama wraps `cmdArguments` with `mcp-proxy --` in the generated Dockerfile, producing `CMD ["mcp-proxy","--","/opt/unbrowser/bin/unbrowser","--mcp"]`.
 
 ### mcp.so
 
