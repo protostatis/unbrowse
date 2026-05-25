@@ -45,6 +45,7 @@ from pathlib import Path
 from typing import Callable
 import urllib.error
 import urllib.request
+from urllib.parse import urlparse
 
 CookieList = list[dict]
 Solver = Callable[[str], CookieList]
@@ -132,7 +133,7 @@ class Router:
                 f"matched={challenge.get('matched')}"
             )
             if self.cfg.chrome_solver is None and not self._cookie_service_url:
-                self._maybe_start_cookie_service()
+                self._maybe_start_cookie_service(url)
             if self.cfg.chrome_solver is None and not self._cookie_service_url:
                 raise RouterError(
                     f"challenge from {challenge['provider']} but no chrome_solver "
@@ -269,7 +270,7 @@ class Router:
             self._cookie_service_caps = {}
         return self._cookie_service_caps
 
-    def _maybe_start_cookie_service(self) -> None:
+    def _maybe_start_cookie_service(self, url: str) -> None:
         if not self.cfg.auto_start_cookie_service:
             return
         if shutil.which(self.cfg.cookie_service_unchained) is None:
@@ -297,8 +298,13 @@ class Router:
             "--no-keep-chrome",
             "--max-wait-seconds",
             str(int(self.cfg.cookie_service_timeout)),
+            "--request-deadline",
+            str(int(self.cfg.cookie_service_timeout)),
             "--quiet",
         ]
+        host = urlparse(url).hostname
+        if host:
+            cmd.extend(["--allow-host", host])
         if self.cfg.cookie_service_headless:
             cmd.append("--headless")
         else:
@@ -307,7 +313,7 @@ class Router:
         self._cookie_service_proc = subprocess.Popen(
             cmd,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
             text=True,
         )
         self._cookie_service_url = f"http://127.0.0.1:{port}"
@@ -320,13 +326,16 @@ class Router:
             self._cookie_service_url = ""
 
     def _wait_for_cookie_service(self) -> None:
-        deadline = time.time() + min(self.cfg.cookie_service_timeout, 15.0)
+        deadline = time.time() + self.cfg.cookie_service_timeout
         last_error = "not ready"
         while time.time() < deadline:
             if self._cookie_service_proc and self._cookie_service_proc.poll() is not None:
-                raise RouterError("cookie service exited during startup")
+                detail = self._drain_cookie_service_stderr()
+                suffix = f": {detail}" if detail else ""
+                raise RouterError(f"cookie service exited during startup{suffix}")
             try:
-                ready = _get_json(f"{self._cookie_service_url}/readyz", timeout=1.0)
+                remaining = max(0.1, min(1.0, deadline - time.time()))
+                ready = _get_json(f"{self._cookie_service_url}/readyz", timeout=remaining)
                 if ready.get("ok"):
                     return
                 last_error = str(ready)
@@ -334,6 +343,15 @@ class Router:
                 last_error = str(exc)
             time.sleep(0.1)
         raise RouterError(last_error)
+
+    def _drain_cookie_service_stderr(self) -> str:
+        proc = self._cookie_service_proc
+        if proc is None or proc.stderr is None:
+            return ""
+        try:
+            return (proc.stderr.read(2000) or "").strip()
+        except Exception:
+            return ""
 
     def _stop_cookie_service(self) -> None:
         proc = self._cookie_service_proc

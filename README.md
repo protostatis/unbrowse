@@ -242,7 +242,7 @@ Then use `scripts/router.py` (or `RouterConfig(cookie_service_url=...)`) as the 
 detect challenge -> call local service -> Chrome obtains cookies -> cookies_set -> retry once
 ```
 
-The service exposes `GET /.well-known/unbrowser-cookie-solver` and `POST /solve`, supports the same challenge providers as `navigate.challenge`, and returns only cookies from the user's local Chrome/unchained session. It does not fabricate challenge tokens. Keep it bound to `127.0.0.1`, use `--allow-host` for domain allowlisting when desired, and use `--no-headless --stealth` for sites that reject headless Chrome. Solves are serialized per service process because a service instance owns one CDP port/profile pair.
+The service exposes `GET /.well-known/unbrowser-cookie-solver` and `POST /solve`, supports the same challenge providers as `navigate.challenge`, and returns only cookies from the user's local Chrome/unchained session. It does not fabricate challenge tokens. Keep it bound to `127.0.0.1`, use `--allow-host` for domain allowlisting when desired, and use `--no-headless --stealth` for sites that reject headless Chrome. Chrome persists across solves by default for the standalone service; pass `--no-keep-chrome` for one-shot use. Solves are serialized per service process because a service instance owns one CDP port/profile pair.
 
 When installed from the Python package, the same pieces are bundled behind the console wrapper:
 
@@ -251,7 +251,7 @@ unbrowser cookie-service --headless --profile unbrowser-cookie-service
 unbrowser router https://example.com/protected
 ```
 
-`unbrowser router` also auto-starts the local cookie service on first challenge when `unchained` is available and `UNBROWSER_COOKIE_SERVICE_URL` is not set. `--allow-host example.com` allows `example.com` and its subdomains only; broad single-label suffixes like `com` are rejected.
+`unbrowser router` also auto-starts the local cookie service on first challenge when `unchained` is available and `UNBROWSER_COOKIE_SERVICE_URL` is not set. `--allow-host example.com` allows `example.com` and its subdomains only; broad single-label suffixes like `com` are rejected. Without an allowlist, the service rejects private/reserved IPs, localhost, and internal single-label hosts by default; use `--allow-host` to opt in to a specific internal host for local testing.
 
 ## SPA-detection diagnostics
 

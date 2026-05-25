@@ -22,6 +22,7 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "scripts"))
 
 from router import Router, RouterConfig  # noqa: E402
+from cookie_service import SolveError, _is_private_or_reserved_host, _validate_allow_hosts  # noqa: E402
 
 
 BIN = REPO / "target" / "debug" / "unbrowser"
@@ -134,12 +135,23 @@ def check(label: str, condition: bool) -> bool:
 
 
 def main() -> int:
+    ok = True
+    ok &= check("localhost is private by default", _is_private_or_reserved_host("localhost"))
+    ok &= check("loopback is private by default", _is_private_or_reserved_host("127.0.0.1"))
+    ok &= check("loopback allow-host is accepted", _validate_allow_hosts(["127.0.0.1"]) == ["127.0.0.1"])
+    try:
+        _validate_allow_hosts(["com"])
+        broad_rejected = False
+    except SolveError:
+        broad_rejected = True
+    ok &= check("broad allow-host is rejected", broad_rejected)
+
     if not BIN.exists():
         print(f"SKIP: missing debug binary at {BIN}; run cargo build")
-        return 0
+        return 0 if ok else 1
     if shutil.which("unchained") is None:
         print("SKIP: unchained CLI is not installed")
-        return 0
+        return 0 if ok else 1
 
     httpd = socketserver.TCPServer(("127.0.0.1", 0), Handler)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
@@ -163,6 +175,8 @@ def main() -> int:
             "--no-keep-chrome",
             "--max-wait-seconds",
             "10",
+            "--allow-host",
+            "127.0.0.1",
             "--quiet",
         ],
         stdout=subprocess.DEVNULL,
@@ -170,7 +184,6 @@ def main() -> int:
         text=True,
     )
 
-    ok = True
     try:
         wait_health(service_url)
         caps = get_json(service_url + "/.well-known/unbrowser-cookie-solver")

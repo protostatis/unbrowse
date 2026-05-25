@@ -20,6 +20,7 @@ import json
 import os
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -62,11 +63,13 @@ class Config:
     launch_timeout: float = 30.0
     wait_timeout: float = 5.0
     max_wait_seconds: float = 45.0
+    request_deadline: float = 90.0
     poll_interval: float = 0.5
     max_queue: int = 4
     request_timeout: float = 15.0
     providers: list[str] = field(default_factory=lambda: list(DEFAULT_PROVIDERS))
     allow_hosts: list[str] = field(default_factory=list)
+    block_private_network: bool = True
     verbose: bool = True
 
 
@@ -146,17 +149,18 @@ class CookieSolver:
             raise SolveError(f"unsupported provider: {provider}")
 
         started = time.time()
-        deadline = started + float(wait_seconds or self.cfg.max_wait_seconds)
+        requested_wait = float(wait_seconds or self.cfg.max_wait_seconds)
+        deadline = started + min(requested_wait, self.cfg.request_deadline)
         cookies: list[dict[str, Any]] = []
         success = False
         try:
-            self._launch(url)
+            self._launch(url, deadline)
             while time.time() < deadline:
-                self._wait()
-                cookies = self._get_cookies(url)
+                self._wait(deadline)
+                cookies = self._get_cookies(url, deadline)
                 if self._has_cookie(cookies, clearance_cookie):
                     break
-                time.sleep(self.cfg.poll_interval)
+                time.sleep(min(self.cfg.poll_interval, max(0.0, deadline - time.time())))
 
             normalized = [
                 c for c in (_normalize_cookie(c, parsed.hostname or "") for c in cookies) if c
@@ -197,11 +201,18 @@ class CookieSolver:
         parsed = urlparse(url)
         if parsed.scheme not in ("http", "https") or not parsed.netloc:
             raise SolveError("url must be an absolute http(s) URL")
-        if self.cfg.allow_hosts and not _host_allowed(parsed.hostname or "", self.cfg.allow_hosts):
-            raise SolveError(f"host is not allowlisted: {parsed.hostname}")
+        host = parsed.hostname or ""
+        if self.cfg.allow_hosts:
+            if not _host_allowed(host, self.cfg.allow_hosts):
+                raise SolveError(f"host is not allowlisted: {host}")
+        elif self.cfg.block_private_network and _is_private_or_reserved_host(host):
+            raise SolveError(
+                f"host {host!r} is not allowed by default; pass --allow-host to opt in"
+            )
         return parsed
 
-    def _launch(self, url: str) -> None:
+    def _launch(self, url: str, deadline: float) -> None:
+        timeout = _bounded_timeout(deadline, self.cfg.launch_timeout)
         cmd = [self.cfg.unchained, "--port", str(self.cfg.cdp_port), "--json", "launch"]
         if self.cfg.use_profile:
             cmd.append("--use-profile")
@@ -211,8 +222,8 @@ class CookieSolver:
             cmd.append("--headless")
         elif self.cfg.stealth:
             cmd.append("--stealth")
-        cmd.extend(["--timeout", str(int(self.cfg.launch_timeout)), url])
-        out = self._run(cmd, timeout=self.cfg.launch_timeout + 10)
+        cmd.extend(["--timeout", str(max(1, int(timeout))), url])
+        out = self._run(cmd, timeout=timeout)
         try:
             payload = json.loads(out.stdout or "{}")
         except json.JSONDecodeError:
@@ -224,7 +235,8 @@ class CookieSolver:
             f"already_running={payload.get('already_running')}"
         )
 
-    def _wait(self) -> None:
+    def _wait(self, deadline: float) -> None:
+        timeout = _bounded_timeout(deadline, self.cfg.wait_timeout)
         cmd = [
             self.cfg.unchained,
             "--port",
@@ -233,11 +245,15 @@ class CookieSolver:
             "--strategy",
             "both",
             "--timeout",
-            str(int(self.cfg.wait_timeout)),
+            str(max(1, int(timeout))),
         ]
-        subprocess.run(cmd, capture_output=True, text=True, timeout=self.cfg.wait_timeout + 5)
+        try:
+            subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired as exc:
+            raise SolveError("unchained wait timed out") from exc
 
-    def _get_cookies(self, url: str) -> list[dict[str, Any]]:
+    def _get_cookies(self, url: str, deadline: float) -> list[dict[str, Any]]:
+        timeout = _bounded_timeout(deadline, 15.0)
         cmd = [
             self.cfg.unchained,
             "--port",
@@ -248,7 +264,7 @@ class CookieSolver:
             "--urls",
             url,
         ]
-        out = self._run(cmd, timeout=15)
+        out = self._run(cmd, timeout=timeout)
         try:
             payload = json.loads(out.stdout or "[]")
         except json.JSONDecodeError as exc:
@@ -269,9 +285,12 @@ class CookieSolver:
         self._owns_chrome = False
 
     def _run(self, cmd: list[str], timeout: float) -> subprocess.CompletedProcess[str]:
-        out = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        label = _command_label(cmd)
+        try:
+            out = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired as exc:
+            raise SolveError(f"{label} timed out") from exc
         if out.returncode != 0:
-            label = _command_label(cmd)
             self._log(f"{label} failed with exit code {out.returncode}")
             raise SolveError(f"{label} failed with exit code {out.returncode}")
         return out
@@ -325,7 +344,13 @@ def make_handler(solver: CookieSolver):
                 self._json(500, {"ok": False, "error": f"internal error: {exc}"})
 
         def _read_json(self) -> dict[str, Any]:
-            n = int(self.headers.get("content-length", "0") or "0")
+            length = self.headers.get("content-length")
+            if length is None:
+                raise SolveError("content-length header is required")
+            try:
+                n = int(length or "0")
+            except ValueError as exc:
+                raise SolveError("content-length must be an integer") from exc
             if n > 64 * 1024:
                 raise SolveError("request body too large")
             raw = self.rfile.read(n).decode("utf-8")
@@ -400,6 +425,42 @@ def _validate_allow_hosts(allow_hosts: list[str]) -> list[str]:
     return out
 
 
+def _is_private_or_reserved_host(host: str) -> bool:
+    h = host.lower().strip(".")
+    if not h:
+        return True
+    if h == "localhost" or h.endswith(".localhost"):
+        return True
+    if "." not in h:
+        return True
+    if h.endswith((".local", ".localdomain", ".internal", ".svc", ".cluster.local")):
+        return True
+    try:
+        ip = ipaddress.ip_address(h)
+        return not ip.is_global
+    except ValueError:
+        pass
+    try:
+        infos = socket.getaddrinfo(h, None, type=socket.SOCK_STREAM)
+    except OSError:
+        return False
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(info[4][0])
+        except (IndexError, ValueError):
+            continue
+        if not ip.is_global:
+            return True
+    return False
+
+
+def _bounded_timeout(deadline: float, preferred: float) -> float:
+    remaining = deadline - time.time()
+    if remaining <= 0:
+        raise SolveError("solve request deadline exceeded")
+    return min(preferred, remaining)
+
+
 def _command_label(cmd: list[str]) -> str:
     if not cmd:
         return "command"
@@ -424,11 +485,13 @@ def parse_args() -> Config:
     p.add_argument("--launch-timeout", type=float, default=30.0)
     p.add_argument("--wait-timeout", type=float, default=5.0)
     p.add_argument("--max-wait-seconds", type=float, default=45.0)
+    p.add_argument("--request-deadline", type=float, default=90.0, help="Total solve request deadline in seconds")
     p.add_argument("--poll-interval", type=float, default=0.5)
     p.add_argument("--max-queue", type=int, default=4, help="Maximum queued/in-flight solve requests")
     p.add_argument("--request-timeout", type=float, default=15.0, help="Per-connection socket timeout in seconds")
     p.add_argument("--providers", default=",".join(DEFAULT_PROVIDERS), help="Comma-separated supported challenge providers")
     p.add_argument("--allow-host", action="append", default=[], help="Restrict solves to this host or suffix; repeatable")
+    p.add_argument("--allow-private-network", action="store_true", help="Allow private/reserved hosts when no --allow-host is configured")
     p.add_argument("--quiet", action="store_true")
     a = p.parse_args()
     return Config(
@@ -444,9 +507,11 @@ def parse_args() -> Config:
         launch_timeout=a.launch_timeout,
         wait_timeout=a.wait_timeout,
         max_wait_seconds=a.max_wait_seconds,
+        request_deadline=a.request_deadline,
         poll_interval=a.poll_interval,
         providers=[x.strip() for x in a.providers.split(",") if x.strip()],
         allow_hosts=_validate_allow_hosts(a.allow_host),
+        block_private_network=not a.allow_private_network,
         verbose=not a.quiet,
         max_queue=a.max_queue,
         request_timeout=a.request_timeout,

@@ -18,7 +18,7 @@ unbrowser cookie-service --headless --profile unbrowser-cookie-service
 unbrowser router https://example.com/protected
 ```
 
-The solver service binds to `127.0.0.1` by default and returns cookies from the user's local Chrome/unchained session. It does not fabricate challenge tokens.
+The solver service binds to `127.0.0.1` by default and returns cookies from the user's local Chrome/unchained session. It does not fabricate challenge tokens. Private/reserved/internal hosts are rejected unless explicitly allowed with `--allow-host`.
 
 ## Quick start
 
