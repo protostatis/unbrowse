@@ -16,7 +16,7 @@ Done:
 
 - `mcp.so`: submission issue opened at `https://github.com/chatmcp/mcpso/issues/2500`.
 - `punkpeye/awesome-mcp-servers`: PR opened at `https://github.com/punkpeye/awesome-mcp-servers/pull/6860`.
-- `ComposioHQ/awesome-claude-skills`: PR opened at `https://github.com/ComposioHQ/awesome-claude-skills/pull/908`.
+- `ComposioHQ/awesome-claude-skills`: PR opened at `https://github.com/ComposioHQ/awesome-claude-skills/pull/908`; checks passing after switching to a README-only external listing.
 
 Pending or blocked:
 
@@ -185,5 +185,5 @@ Comparison copy:
 3. Submit/claim on Glama.
 4. Open PR to `punkpeye/awesome-mcp-servers`.
 5. Open PR to `ComposioHQ/awesome-claude-skills`.
-6. Add a small Claude/agent skill if the Composio PR benefits from a concrete skill folder.
+6. Do not add a Composio skill folder unless their validator changes; current PR validation allows `README.md` only.
 7. Launch on HN only after two directory/listing links are live.
