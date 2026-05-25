@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote_plus, urljoin, urlparse
 
-__version__ = "0.0.12"
+__version__ = "0.0.13"
 
 __all__ = ["Client", "UnbrowserError", "find_binary", "navigate", "__version__"]
 
@@ -186,6 +186,16 @@ class Client:
     def query(self, selector: str) -> list[dict]:
         return self.call("query", selector=selector)
 
+    def query_debug(self, selector: str, limit: int = 10) -> dict:
+        """Diagnose selector misses.
+
+        Returns matched_count, sample matches, DOM summary counts, selector
+        hints (top tags/classes/data attrs/ids), and hints such as
+        selector_miss, thin_shell, or embedded_json. Use when query() returns
+        [] and you need to distinguish a bad selector from an empty DOM.
+        """
+        return self.call("query_debug", selector=selector, limit=limit)
+
     def text(self, selector: str = "body") -> str | None:
         return self.call("text", selector=selector)
 
@@ -291,6 +301,10 @@ class Client:
         anything <table>-shaped. Saves writing the per-cell mapping eval.
         """
         return self.call("extract_table", selector=selector)
+
+    def table_to_json(self, selector: str = "table") -> dict | None:
+        """Alias for extract_table with a first-table default."""
+        return self.call("table_to_json", selector=selector)
 
     def extract_list(self, item_selector: str, fields: dict,
                      limit: int = 1000) -> list[dict]:

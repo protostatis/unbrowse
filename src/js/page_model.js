@@ -556,10 +556,21 @@
         var date = dateField(card);
         var text = textOf(card, 900);
         var kind = inferCardKind(card, title, url || '', tags, text);
+        var commerce = null;
+        if (typeof globalThis.__cardCommerceFields === 'function') {
+          try { commerce = globalThis.__cardCommerceFields(card, title, snippet); } catch (e) { commerce = null; }
+        }
+        if (commerce && commerce.price && kind === 'card') kind = 'product_card';
         var key = (url || '') + '\n' + title;
         if (seen[key]) continue;
         seen[key] = true;
         var fields = { tags: tags };
+        if (commerce) {
+          if (commerce.price) fields.price = commerce.price;
+          if (commerce.condition) fields.condition = commerce.condition;
+          if (commerce.availability) fields.availability = commerce.availability;
+          if (commerce.meta && commerce.meta.length) fields.meta = commerce.meta;
+        }
         if (date) fields.date = date;
         if (/updated/i.test(text) && date) fields.updated = date;
         if (kind === 'model_card' && title.indexOf('/') !== -1) {
@@ -671,6 +682,8 @@
       if (!blockmap || !blockmap.density) return;
       if (blockmap.density.thin_shell) {
         limitations.push({ kind: 'limitation', reason: 'thin_shell', confidence: 0.76, evidence: ['blockmap.density.thin_shell'], hint: 'The DOM is a thin shell; no semantic objects may be available without script-rendered state.' });
+      } else if (blockmap.density.script_heavy_shell) {
+        limitations.push({ kind: 'limitation', reason: 'script_heavy_shell', confidence: 0.74, evidence: ['blockmap.density.script_heavy_shell'], hint: 'The page has many scripts but little visible DOM content; browser-rendered state may be required.' });
       } else if (blockmap.density.likely_js_filled) {
         limitations.push({ kind: 'limitation', reason: 'rendered_result_required', confidence: 0.68, evidence: ['blockmap.density.likely_js_filled'], hint: 'The page likely expects JS to fill content that is absent from the static DOM.' });
       }

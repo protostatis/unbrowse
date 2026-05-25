@@ -9,7 +9,7 @@ build-backend = "hatchling.build"
 # (cf. python-dateutil → `from dateutil import ...`); the import name and
 # binary stay `unbrowser` everywhere else.
 name = "pyunbrowser"
-version = "0.0.12"
+version = "0.0.13"
 description = "Web access for LLM agents. One static binary. No Chrome."
 readme = "README.md"
 license = { text = "Apache-2.0" }
@@ -45,14 +45,14 @@ unbrowser = "unbrowser._cli:main"
 
 # The wheel ships the platform-specific native binary inside unbrowser/_bin/.
 # CI builds the binary first (cargo build --release for each target), copies
-# it into unbrowser/_bin/, then runs `python -m build --wheel` to produce a
-# platform-tagged wheel. The release workflow intentionally does not publish an
-# sdist until source installs can build the native binary.
+# it into unbrowser/_bin/, then runs `python -m build --wheel` and retags the
+# wheel for the exact target platform. The release workflow intentionally does
+# not publish an sdist until source installs can build the native binary.
 [tool.hatch.build.targets.wheel]
 packages = ["unbrowser"]
-# pure-python = false flips the wheel from py3-none-any to a platform-tagged
-# wheel based on the host (macosx_*, linux_*, etc.). CI cross-compiles by
-# post-processing the wheel name via `wheel tags --platform <target>`.
+# pure-python = false tells installers this is not a universal wheel. Hatchling
+# may still emit a host-platform tag; CI cross-compiles by post-processing the
+# wheel name via `wheel tags --platform <target>`.
 pure-python = false
 # Even though _bin/* is gitignored (binary is a build artifact, never in git),
 # hatchling's package auto-discovery picks up the binary if it's physically

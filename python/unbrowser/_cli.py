@@ -23,12 +23,24 @@ def _usage() -> None:
         """unbrowser
 
 Usage:
+  unbrowser session start [--id <id>] [--profile <name>] [--policy=blocklist] [--shims stable|enhanced]
+  unbrowser session exec [--pretty] <id|socket> <method> [params-json | shorthand args]
+  unbrowser exec [--pretty] <id|socket> <method> [params-json | shorthand args]
+  unbrowser session stop <id|socket>
+  unbrowser session list
+  unbrowser session prune
   unbrowser navigate <url> [--exec-scripts] [--json] [--events] [--shims stable|enhanced]
   unbrowser policy-check <url> [<url>...]
+  unbrowser --list-profiles
+  unbrowser --prefit-info
   unbrowser [--profile <name>] [--policy=blocklist] [--shims stable|enhanced] [--mcp]
   unbrowser --version
 
 Examples:
+  unbrowser session start --id demo
+  unbrowser exec demo navigate https://news.ycombinator.com
+  unbrowser exec --pretty demo blockmap
+  unbrowser session stop demo
   unbrowser navigate https://news.ycombinator.com --json
   unbrowser policy-check https://www.bbc.com/news
   printf '{\"id\":1,\"method\":\"navigate\",\"params\":{\"url\":\"https://news.ycombinator.com\"}}\n' | unbrowser

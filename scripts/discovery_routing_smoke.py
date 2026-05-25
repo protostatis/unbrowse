@@ -6,6 +6,8 @@ This covers the benchmark failure modes without live network dependencies:
 - dictionary/search form must expose a query URL and not browser-route;
 - enable-JS shell must browser-route;
 - AWS WAF-like interstitial must challenge-route.
+- PerimeterX-like interstitial must keep the PX vendor/cookie hint even when
+  generic human-verification copy is present.
 - same-origin filtering that removes all routes must return a no-routes signal.
 """
 from __future__ import annotations
@@ -72,6 +74,15 @@ AWS_WAF_HTML = """<!doctype html><html><head><title>Checking</title></head><body
   <script src="/awswaf/challenge.js"></script>
 </body></html>"""
 
+PERIMETERX_HTML = """<!doctype html><html><head><title>Access Denied</title>
+  <script>window._pxAppId = "PXfake";</script>
+  <script src="/_px/PXfake/init.js"></script>
+</head><body>
+  <div id="px-captcha"></div>
+  <h1>Are you a human?</h1>
+  <p>Pardon our interruption.</p>
+</body></html>"""
+
 
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
@@ -89,6 +100,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             # use 202 Accepted while the browser computes/replays a token.
             status = 202
             body = AWS_WAF_HTML
+        elif self.path.startswith("/perimeterx"):
+            status = 403
+            body = PERIMETERX_HTML
         else:
             body = "<!doctype html><title>OK</title><h1>OK</h1>"
         payload = body.encode()
@@ -198,6 +212,12 @@ def main() -> int:
         challenge = (waf.get("navigate_summary") or waf.get("navigate") or {}).get("challenge") or {}
         ok &= check("AWS WAF page challenge-routes", challenge.get("provider") == "aws_waf")
         ok &= check("AWS WAF top-ranks Chrome", top_tools(waf)[0] == "chrome_escalation")
+
+        px = ub.call("discover", url=base + "/perimeterx", goal="view products", limit=20)
+        challenge = (px.get("navigate_summary") or px.get("navigate") or {}).get("challenge") or {}
+        ok &= check("PerimeterX page keeps PX provider", challenge.get("provider") == "perimeterx_block")
+        ok &= check("PerimeterX exposes clearance cookie hint", challenge.get("clearance_cookie") == "_px3")
+        ok &= check("PerimeterX top-ranks Chrome", top_tools(px)[0] == "chrome_escalation")
     finally:
         ub.close()
         httpd.shutdown()

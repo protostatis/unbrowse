@@ -31,32 +31,7 @@ jobs:
       - name: Verify tag and package versions
         env:
           RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
-        run: |
-          python3 - <<'PY'
-          import os
-          import pathlib
-          import re
-          import sys
-          import tomllib
-
-          tag = os.environ["RELEASE_TAG"]
-          if not re.fullmatch(r"v\d+\.\d+\.\d+", tag):
-              raise SystemExit(f"release tag must look like vX.Y.Z, got {tag!r}")
-          version = tag[1:]
-
-          cargo = tomllib.loads(pathlib.Path("Cargo.toml").read_text())["package"]["version"]
-          pyproject = tomllib.loads(pathlib.Path("python/pyproject.toml").read_text())["project"]["version"]
-          init = pathlib.Path("python/unbrowser/__init__.py").read_text()
-          match = re.search(r'^__version__ = "([^"]+)"', init, re.M)
-          if not match:
-              raise SystemExit("python/unbrowser/__init__.py has no __version__")
-          module = match.group(1)
-
-          versions = {"tag": version, "Cargo.toml": cargo, "pyproject.toml": pyproject, "__version__": module}
-          if len(set(versions.values())) != 1:
-              raise SystemExit("version mismatch: " + repr(versions))
-          print("release version", version)
-          PY
+        run: python3 scripts/release_check.py --tag "$RELEASE_TAG"
 
   build:
     name: Build ${{ matrix.target }}
@@ -116,7 +91,7 @@ jobs:
           yum install -y cmake ninja-build
 
       - name: Build release binary
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --locked --target ${{ matrix.target }}
 
       - name: Install Rosetta for Intel macOS smoke
         if: runner.os == 'macOS' && matrix.target == 'x86_64-apple-darwin'
@@ -168,11 +143,19 @@ jobs:
           cd python && python -m build --wheel
 
       - name: Re-tag wheel for ${{ matrix.wheel_platform }}
-        # hatchling produces py3-none-any; we re-tag to the correct platform
-        # since the wheel bundles a platform-specific binary.
+        # Re-tag to the exact target platform since the wheel bundles a
+        # platform-specific binary. Hatchling may emit either py3-none-any or a
+        # host-platform tag depending on backend version/config.
         run: |
           cd python/dist
-          python -m wheel tags --remove --platform-tag ${{ matrix.wheel_platform }} pyunbrowser-*-py3-none-any.whl
+          wheel=$(python - <<'PY'
+          import glob
+          wheels = glob.glob('pyunbrowser-*.whl')
+          assert len(wheels) == 1, wheels
+          print(wheels[0])
+          PY
+          )
+          python -m wheel tags --remove --platform-tag ${{ matrix.wheel_platform }} "$wheel"
           ls -la
 
       - name: Validate wheel contents
@@ -351,7 +334,7 @@ jobs:
           key: x86_64-unknown-linux-gnu
 
       - name: Build release binary
-        run: cargo build --release --target x86_64-unknown-linux-gnu
+        run: cargo build --release --locked --target x86_64-unknown-linux-gnu
 
       - name: Smoke test (Unix)
         run: |
@@ -380,15 +363,22 @@ jobs:
           cd python && python3 -m build --wheel
 
       - name: Re-tag wheel for manylinux_2_31_x86_64
-        # Hatchling emits py3-none-any because the Python code itself is pure
-        # Python; we retag only the platform because the wheel bundles the
-        # native binary in unbrowser/_bin/.
+        # Re-tag to manylinux because the wheel bundles the native binary in
+        # unbrowser/_bin/. Hatchling may emit either py3-none-any or a host
+        # platform tag depending on backend version/config.
         run: |
           cd python/dist
+          wheel=$(python3 - <<'PY'
+          import glob
+          wheels = glob.glob('pyunbrowser-*.whl')
+          assert len(wheels) == 1, wheels
+          print(wheels[0])
+          PY
+          )
           # `--remove` strips the original platform tag before we add the real
           # Linux target. `wheel tags` is required here because the package is
           # not an extension module, just a Python wrapper around a binary.
-          python3 -m wheel tags --remove --platform-tag manylinux_2_31_x86_64 pyunbrowser-*-py3-none-any.whl
+          python3 -m wheel tags --remove --platform-tag manylinux_2_31_x86_64 "$wheel"
           ls -la
 
       - name: Validate wheel contents

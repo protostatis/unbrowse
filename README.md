@@ -50,7 +50,7 @@ The `unchained` key is only the client-side alias. Use `unbrowser` if you want e
 curl -L https://github.com/protostatis/unbrowser/releases/latest/download/unbrowser-aarch64-apple-darwin.tar.gz | tar xz
 # macOS Intel
 curl -L https://github.com/protostatis/unbrowser/releases/latest/download/unbrowser-x86_64-apple-darwin.tar.gz | tar xz
-# Linux x86_64 (glibc 2.35+)
+# Linux x86_64 (glibc 2.31+ / Ubuntu 20.04+)
 curl -L https://github.com/protostatis/unbrowser/releases/latest/download/unbrowser-x86_64-unknown-linux-gnu.tar.gz | tar xz
 ```
 
@@ -60,7 +60,19 @@ curl -L https://github.com/protostatis/unbrowser/releases/latest/download/unbrow
 cargo build --release   # binary at ./target/release/unbrowser
 ```
 
-### Bare RPC
+### Session CLI
+
+For shell-only agents, use a persistent session instead of heredoc JSON-RPC:
+
+```bash
+unbrowser session start --id demo
+unbrowser exec demo navigate https://news.ycombinator.com
+unbrowser exec demo query '.titleline > a'
+unbrowser exec --pretty demo blockmap
+unbrowser session stop demo
+```
+
+### Bare RPC (low-level escape hatch)
 
 ```bash
 echo '{"id":1,"method":"navigate","params":{"url":"https://news.ycombinator.com"}}' | unbrowser
@@ -217,11 +229,34 @@ Every blocked navigate returns a `challenge` field naming the vendor (`perimeter
 ## SPA-detection diagnostics
 
 Every navigate's `blockmap.density` field signals SPA-ness so agents bail before wasting round-trips:
-- `thin_shell: true` — page is < 4KB body text with no headings or interactives (typical React/Ember root)
-- `likely_js_filled: true` — `<table>` shells exist but are empty (CNBC-class trap)
+- `thin_shell: true` — page is < 4KB body text with no headings or interactives (typical React/Ember root). For HTTP errors (`status >= 400`), shell signals are suppressed and `http_error_status` is attached so a 404 is not mistaken for an SPA.
+- `likely_js_filled: true` — table/list/cell shells are empty, or the page has many scripts with little visible UI (CNBC / YouTube-class trap)
 - `json_scripts: N` — count of `<script type="application/json">` (often holds the data the JS would render — try `eval()` on those before escalating)
+- `script_heavy_shell: true` — many scripts, little text, few links; usually browser-rendered UI rather than useful SSR
 
 ## Three ways agents talk to it
+
+### Session CLI (persistent shell workflow)
+
+When an agent can only shell out but needs incremental state, start a local daemon-backed session. Cookies, DOM, JS globals, and element refs persist until `stop`:
+
+```bash
+unbrowser session start --id golf
+unbrowser exec golf navigate https://news.ycombinator.com
+unbrowser exec golf query '.titleline > a'
+unbrowser exec --pretty golf blockmap
+unbrowser exec golf eval 'document.title'
+unbrowser session stop golf
+```
+
+`session exec` and the shorter `exec` alias accept either shorthand args for common methods or a raw JSON params object:
+
+```bash
+unbrowser exec golf navigate https://example.com --exec-scripts
+unbrowser exec golf query_debug '.product-card' --limit 5
+unbrowser exec golf extract_cards '{"kind":"product","limit":20}'
+unbrowser session prune   # remove dead sockets
+```
 
 ### MCP (no glue)
 
@@ -267,14 +302,17 @@ unbrowser 2> >(python3 scripts/watch.py)
 | | |
 |---|---|
 | `navigate {url}` | fetch + parse + return `{status, url, bytes, headers, blockmap, challenge, tool_confidence, tool_margin, tool_likelihoods, tool_recommendations}` |
-| `query {selector}` | CSS query → `[{ref, tag, attrs, text}]` |
+| `query {selector}` | CSS query → `[{ref, tag, attrs, text, text_chars, text_truncated}]` |
+| `query_debug {selector, limit?}` | explain selector misses: match count, sample matches, DOM summary, top tags/classes/data attrs/ids, and hints like `selector_miss`, `thin_shell`, `embedded_json` |
 | `text {selector?}` | textContent of FIRST match (default `body`). On Wikipedia/MDN/news sites the first `<p>` is often a hatnote — prefer `text_main` for article body. |
 | `text_main` | textContent of `<main>` / `[role=main]` / single `<article>` / longest non-chrome subtree. Use this for reading article/docs/blog content. |
 | `discover {url?, goal?, exec_scripts?, same_origin?, include_network?, limit?, debug?}` | Cheap-first information discovery. Merges DOM routes, inferred form/query URLs, and network JSON routes into one ranked graph with provenance and escalation hints. Defaults to static discovery; set `exec_scripts: true` when fetch-visible routes are insufficient. |
+| `extract_cards {selector?, limit?, kind?}` | auto-detect repeated product/listing/article cards and return normalized fields including `title`, `price`, `condition`, `url`, `availability`, `snippet`, `meta`, `image_alt`, `score` |
+| `extract_table {selector}` / `table_to_json {selector?}` | normalize an HTML table into headers, rows, and row count. `table_to_json` defaults to the first `table`. |
 | `click {ref}` | dispatch click; auto-follows `<a href>` (returns `{status, url, bytes, headers, blockmap, challenge}` — same shape as `navigate`) |
 | `type {ref, text}` | set value + dispatch input/change events |
 | `submit {ref}` | gather form fields and navigate. Supports GET and `application/x-www-form-urlencoded` POST; multipart is not supported. |
-| `eval {code}` | run JS in embedded QuickJS |
+| `eval {code}` | run JS in embedded QuickJS. Raw JSON-RPC also accepts `script` or `expression` aliases and now errors instead of silently returning `null` when no code-like param is present. |
 | `cookies_set / cookies_get / cookies_clear` | session jar |
 | `blockmap` | recompute the page summary |
 | `body` | raw HTML of last navigation |
@@ -289,7 +327,7 @@ unbrowser 2> >(python3 scripts/watch.py)
 
 Use `exec_scripts: true` as an opt-in second pass for pages whose static HTML does not expose enough routes. In that mode, routes already present before scripts are labeled `static_dom`; routes that only appear after JavaScript/timers/fetches are labeled `js_dom`.
 
-CSS selector engine: tag, id, class, `[attr=val]` (also `^=`, `$=`, `*=`, `~=`), all four combinators (` `, `>`, `+`, `~`), `:first/last/nth-child/of-type`, `:only-child/of-type`. Use `eval` for `:not()`, `:has()`, formulas.
+CSS selector engine: tag, id, class, `[attr=val]` (also `^=`, `$=`, `*=`, `~=`), all four combinators (` `, `>`, `+`, `~`), `:first/last/nth-child/of-type` including An+B formulas, `:only-child/of-type`, `:not()`, and `:has()`.
 
 ## When to escalate to real Chrome
 
