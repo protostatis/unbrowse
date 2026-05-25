@@ -16,13 +16,13 @@ Done:
 
 - `mcp.so`: submission issue opened at `https://github.com/chatmcp/mcpso/issues/2500`.
 - `mcpservers.org`: free submission completed with contact email `protostatis.dev@gmail.com`; site reported successful submission and review within 12 hours.
+- Glama: signed in with `protostatis.dev@gmail.com` and submitted `unbrowser` via Add Server for review; search for `unbrowser` is not public yet.
 - `punkpeye/awesome-mcp-servers`: PR opened at `https://github.com/punkpeye/awesome-mcp-servers/pull/6860`.
 - `ComposioHQ/awesome-claude-skills`: PR opened at `https://github.com/ComposioHQ/awesome-claude-skills/pull/908`; checks passing after switching to a README-only external listing.
 
 Pending or blocked:
 
 - `appcypher/awesome-mcp-servers`: branch pushed to `https://github.com/protostatis/awesome-mcp-servers/tree/add-unbrowser`; `gh pr create` failed with `CreatePullRequest` permissions. Manual compare URL: `https://github.com/appcypher/awesome-mcp-servers/compare/main...protostatis:add-unbrowser`.
-- Glama: likely follows `punkpeye/awesome-mcp-servers` once merged; direct Add Server flow requires Glama signup plus CAPTCHA, so not completed here.
 - Smithery: not submitted yet; do after basic directory/listing links are live.
 
 One-liner:
