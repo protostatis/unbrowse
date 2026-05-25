@@ -241,7 +241,7 @@ Then use `scripts/router.py` (or `RouterConfig(cookie_service_url=...)`) as the 
 detect challenge -> call local service -> Chrome obtains cookies -> cookies_set -> retry once
 ```
 
-The service exposes `GET /.well-known/unbrowser-cookie-solver` and `POST /solve`, supports the same challenge providers as `navigate.challenge`, and returns only cookies from the user's local Chrome/unchained session. It does not fabricate challenge tokens. Keep it bound to `127.0.0.1`, use `--allow-host` for domain allowlisting when desired, and use `--no-headless` for sites that reject headless Chrome.
+The service exposes `GET /.well-known/unbrowser-cookie-solver` and `POST /solve`, supports the same challenge providers as `navigate.challenge`, and returns only cookies from the user's local Chrome/unchained session. It does not fabricate challenge tokens. Keep it bound to `127.0.0.1`, use `--allow-host` for domain allowlisting when desired, and use `--no-headless --stealth` for sites that reject headless Chrome. Solves are serialized per service process because a service instance owns one CDP port/profile pair.
 
 ## SPA-detection diagnostics
 

@@ -16,8 +16,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -71,6 +73,7 @@ class CookieSolver:
     def __init__(self, cfg: Config):
         self.cfg = cfg
         self._owns_chrome = False
+        self._solve_lock = threading.Lock()
 
     def capabilities(self) -> dict[str, Any]:
         return {
@@ -92,50 +95,61 @@ class CookieSolver:
         clearance_cookie: str | None = None,
         wait_seconds: float | None = None,
     ) -> dict[str, Any]:
+        with self._solve_lock:
+            return self._solve_locked(url, provider, clearance_cookie, wait_seconds)
+
+    def _solve_locked(
+        self,
+        url: str,
+        provider: str | None,
+        clearance_cookie: str | None,
+        wait_seconds: float | None,
+    ) -> dict[str, Any]:
         parsed = self._validate_url(url)
         if provider and provider not in self.cfg.providers:
             raise SolveError(f"unsupported provider: {provider}")
 
         started = time.time()
         deadline = started + float(wait_seconds or self.cfg.max_wait_seconds)
-        self._launch(url)
-
         cookies: list[dict[str, Any]] = []
+        success = False
         try:
+            self._launch(url)
             while time.time() < deadline:
                 self._wait()
                 cookies = self._get_cookies(url)
                 if self._has_cookie(cookies, clearance_cookie):
                     break
                 time.sleep(self.cfg.poll_interval)
-        finally:
-            if not self.cfg.keep_chrome and self._owns_chrome:
-                self._kill_chrome()
 
-        normalized = [_normalize_cookie(c, parsed.hostname or "") for c in cookies]
-        cookie_names = sorted({c["name"] for c in normalized})
-        if clearance_cookie and clearance_cookie not in cookie_names:
-            raise SolveError(
-                f"clearance cookie {clearance_cookie!r} was not observed; "
-                f"observed={cookie_names}"
+            normalized = [_normalize_cookie(c, parsed.hostname or "") for c in cookies]
+            cookie_names = sorted({c["name"] for c in normalized})
+            if clearance_cookie and clearance_cookie not in cookie_names:
+                raise SolveError(
+                    f"clearance cookie {clearance_cookie!r} was not observed; "
+                    f"observed={cookie_names}"
+                )
+            if not normalized:
+                raise SolveError("no cookies exported from Chrome")
+
+            success = True
+            self._log(
+                f"solved provider={provider or 'unknown'} host={parsed.netloc} "
+                f"cookies={cookie_names} elapsed_ms={int((time.time() - started) * 1000)}"
             )
-        if not normalized:
-            raise SolveError("no cookies exported from Chrome")
-
-        self._log(
-            f"solved provider={provider or 'unknown'} host={parsed.netloc} "
-            f"cookies={cookie_names} elapsed_ms={int((time.time() - started) * 1000)}"
-        )
-        return {
-            "ok": True,
-            "provider": provider,
-            "url": url,
-            "cookies": normalized,
-            "cookie_names": cookie_names,
-            "elapsed_ms": int((time.time() - started) * 1000),
-            "headless": self.cfg.headless,
-            "stealth": self.cfg.stealth or self.cfg.headless,
-        }
+            return {
+                "ok": True,
+                "provider": provider,
+                "url": url,
+                "cookies": normalized,
+                "cookie_names": cookie_names,
+                "elapsed_ms": int((time.time() - started) * 1000),
+                "headless": self.cfg.headless,
+                "stealth": self.cfg.stealth or self.cfg.headless,
+            }
+        finally:
+            if self._owns_chrome and (not self.cfg.keep_chrome or not success):
+                self._kill_chrome()
 
     def shutdown(self) -> None:
         if self._owns_chrome:
@@ -219,8 +233,9 @@ class CookieSolver:
     def _run(self, cmd: list[str], timeout: float) -> subprocess.CompletedProcess[str]:
         out = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
         if out.returncode != 0:
-            detail = (out.stderr or out.stdout or "").strip()
-            raise SolveError(f"command failed ({out.returncode}): {' '.join(cmd)}: {detail}")
+            label = _command_label(cmd)
+            self._log(f"{label} failed with exit code {out.returncode}")
+            raise SolveError(f"{label} failed with exit code {out.returncode}")
         return out
 
     @staticmethod
@@ -314,6 +329,16 @@ def _host_allowed(host: str, allow_hosts: list[str]) -> bool:
     return False
 
 
+def _command_label(cmd: list[str]) -> str:
+    if not cmd:
+        return "command"
+    base = os.path.basename(cmd[0]) or "command"
+    for subcommand in ("launch", "wait", "cookies", "kill"):
+        if subcommand in cmd:
+            return f"{base} {subcommand}"
+    return base
+
+
 def parse_args() -> Config:
     p = argparse.ArgumentParser(description="Local unchained-backed cookie solver service")
     p.add_argument("--host", default=os.environ.get("UNBROWSER_COOKIE_SERVICE_HOST", "127.0.0.1"))
@@ -362,6 +387,9 @@ def _env_bool(name: str, default: bool) -> bool:
 
 def main() -> int:
     cfg = parse_args()
+    if shutil.which(cfg.unchained) is None:
+        sys.stderr.write(f"[cookie-service] unchained binary not found: {cfg.unchained}\n")
+        return 2
     solver = CookieSolver(cfg)
     httpd = ThreadingHTTPServer((cfg.host, cfg.port), make_handler(solver))
     if cfg.verbose:
