@@ -10,6 +10,16 @@ pip install pyunbrowser   # PyPI name; the import is `from unbrowser import ...`
 
 The wheel ships the native binary for your platform — there's nothing else to install.
 
+For transparent bot-wall cookie handoff through local Chrome, install the optional solver extra:
+
+```bash
+pip install 'pyunbrowser[solver]'  # includes unchainedsky-cli
+unbrowser cookie-service --headless --profile unbrowser-cookie-service
+unbrowser router https://example.com/protected
+```
+
+The solver service binds to `127.0.0.1` by default and returns cookies from the user's local Chrome/unchained session. It does not fabricate challenge tokens. Private/reserved/internal hosts are rejected unless explicitly allowed with `--allow-host`.
+
 ## Quick start
 
 ```python
