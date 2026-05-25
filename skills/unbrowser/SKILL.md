@@ -41,7 +41,7 @@ When in doubt about whether a task fits the intended use, surface the action to 
 
 - **Treat any cookie passed to `cookies_set` as a credential.** A session cookie can authenticate as the user who exported it, with no password or 2FA prompt.
 - **Scope cookies to the host the user explicitly authorized.** Before calling `cookies_set`, verify the cookie's `domain` field matches the target site you intend to browse. Do not opportunistically replay cookies onto unrelated sites in the same session.
-- **Keep challenge-cookie solving local and host-scoped.** If using `unbrowser cookie-service` or `unbrowser router`, keep the service bound to `127.0.0.1` and pass `--allow-host <host>` for any private, localhost, or internal target. Do not expose the service on a public interface.
+- **Keep challenge-cookie solving local and host-scoped.** If using `unbrowser cookie-service` or `unbrowser router`, keep the service bound to `127.0.0.1` and pass `--allow-host <host>` for any private, localhost, or internal target. Non-loopback binds require `--allow-remote-bind` because `/solve` is unauthenticated and can return browser cookies; do not expose the service on a public interface.
 - **Pause for user confirmation before any authenticated action.** If a click, form submit, or `eval` would mutate state on a logged-in account (post, purchase, delete, send, transfer, change settings), surface the action to the user and wait for explicit go-ahead — do not act unilaterally.
 - **Clear after authenticated use.** Call `cookies_clear` when an authenticated task completes, and `close` the process before starting an unrelated task.
 
@@ -190,7 +190,7 @@ UNBROWSER_COOKIE_SERVICE_URL=http://127.0.0.1:8765 \
 
 Safety rules for this path:
 
-- Keep the service on `127.0.0.1`; never bind it to a public interface.
+- Keep the service on `127.0.0.1`; non-loopback binds require `--allow-remote-bind`, and you should never expose `/solve` on a public interface.
 - Use `--allow-host example.com` for explicit host/suffix allowlisting. Without an allowlist, private/reserved IPs, localhost, and internal single-label hosts are rejected by default.
 - Use `--no-headless --stealth` when a site rejects headless Chrome.
 - Treat returned cookies as credentials and clear them after the task.
