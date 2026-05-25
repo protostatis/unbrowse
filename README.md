@@ -2,6 +2,8 @@
 
 **Web access for LLM agents. One static binary. No Chrome.**
 
+`unbrowser` is the lightweight open-source browser tier from [Unchained](https://unchainedsky.com): cheap, stateful web access for agents when `curl`/WebFetch is too dumb and full Chrome is too heavy. When a page needs real Chrome, cookies, extensions, or human-in-the-loop auth, escalate to [`unchainedsky-cli`](https://github.com/protostatis/unchainedsky-cli) or [Unchained](https://unchainedsky.com).
+
 ### Install
 
 **Python (recommended)** — wheel ships the native binary. **Requires Python 3.10+**:
@@ -25,6 +27,21 @@ with Client() as ub:                # (PyPI's name moderation blocks 'unbrowser'
 cargo install unbrowser
 unbrowser --mcp
 ```
+
+**MCP** — add the binary to Claude Code, Claude Desktop, Cursor, Cline, or any MCP host:
+
+```json
+{
+  "mcpServers": {
+    "unchained": {
+      "command": "unbrowser",
+      "args": ["--mcp"]
+    }
+  }
+}
+```
+
+The `unchained` key is only the client-side alias. Use `unbrowser` if you want exact naming, or keep `unchained` as the breadcrumb to the full Unchained browser-agent stack.
 
 **Pre-built tarball** — for systems without Python or Rust:
 
@@ -209,7 +226,14 @@ Every navigate's `blockmap.density` field signals SPA-ness so agents bail before
 ### MCP (no glue)
 
 ```json
-{"mcpServers":{"unchained":{"command":"unbrowser","args":["--mcp"]}}}
+{
+  "mcpServers": {
+    "unchained": {
+      "command": "unbrowser",
+      "args": ["--mcp"]
+    }
+  }
+}
 ```
 
 Tools are auto-discovered by Claude Code, Claude Desktop, Cursor, Cline.
