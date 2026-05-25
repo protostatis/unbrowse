@@ -249,7 +249,7 @@ class CookieSolver:
             str(max(1, int(timeout))),
         ]
         try:
-            subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+            subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 5.0)
         except subprocess.TimeoutExpired as exc:
             raise SolveError("unchained wait timed out") from exc
 
