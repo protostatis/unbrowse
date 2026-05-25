@@ -35,7 +35,11 @@ def version_from_skill() -> str | None:
 
 def version_from_cargo_lock() -> str:
     lock = tomllib.loads(read("Cargo.lock"))
-    matches = [pkg.get("version") for pkg in lock.get("package", []) if pkg.get("name") == "unbrowser"]
+    matches = [
+        pkg.get("version")
+        for pkg in lock.get("package", [])
+        if pkg.get("name") == "unbrowser" and pkg.get("version") is not None
+    ]
     require(len(matches) == 1, f"Cargo.lock should contain exactly one unbrowser package, got {matches!r}")
     version = matches[0]
     require(isinstance(version, str), "Cargo.lock unbrowser package has no string version")

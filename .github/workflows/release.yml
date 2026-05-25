@@ -140,6 +140,7 @@ jobs:
       - name: Build wheel
         run: |
           python -m pip install --upgrade pip build wheel
+          rm -rf python/dist
           cd python && python -m build --wheel
 
       - name: Re-tag wheel for ${{ matrix.wheel_platform }}
@@ -360,6 +361,7 @@ jobs:
       - name: Build wheel
         run: |
           python3 -m pip install --upgrade pip build 'wheel>=0.40.0'
+          rm -rf python/dist
           cd python && python3 -m build --wheel
 
       - name: Re-tag wheel for manylinux_2_31_x86_64

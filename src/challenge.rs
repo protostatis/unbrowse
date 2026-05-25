@@ -118,6 +118,7 @@ pub fn detect(status: u16, body: &str) -> Option<Detection> {
                 "awswafcookiedomainlist",
                 "gokuprops",
                 "aws-waf-token",
+                "aws-waf-client",
                 "/awswaf/",
             ],
             "aws-waf-token",
@@ -660,6 +661,16 @@ mod tests {
         let d = detect(202, body).expect("should detect aws waf");
         assert_eq!(d.provider, "aws_waf");
         assert_eq!(d.clearance_cookie, Some("aws-waf-token"));
+    }
+
+    #[test]
+    fn detect_aws_waf_client_beats_generic_interstitial_copy() {
+        let body = r#"<html><head><script src="/aws-waf-client.js"></script></head>
+            <body><h1>Are you a human?</h1><p>Pardon our interruption.</p></body></html>"#;
+        let d = detect(202, body).expect("should detect aws waf");
+        assert_eq!(d.provider, "aws_waf");
+        assert_eq!(d.clearance_cookie, Some("aws-waf-token"));
+        assert!(d.matched.contains(&"aws-waf-client"));
     }
 
     #[test]
