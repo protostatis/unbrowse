@@ -5,16 +5,13 @@ Registered in pyproject.toml as `[project.scripts] unbrowser = ...`, so
 agents and MCP hosts can use directly (e.g. `command: "unbrowser"` in
 .mcp.json).
 
-The wrapper keeps the native binary as the execution engine, but adds a
-shell-friendly one-shot `navigate` command and a useful `--help` surface.
-All other invocations are passed through to the binary unchanged.
+The wrapper keeps the native binary as the execution engine and exposes a
+useful `--help` surface. Invocations are passed through to the binary.
 """
 
 from __future__ import annotations
 
-import json
 import os
-import subprocess
 import sys
 
 from . import find_binary
@@ -25,9 +22,10 @@ def _usage() -> None:
         """unbrowser
 
 Usage:
-  unbrowser navigate <url> [--exec-scripts] [--json]
+  unbrowser navigate <url> [--exec-scripts] [--json] [--events] [--shims stable|enhanced]
   unbrowser policy-check <url> [<url>...]
-  unbrowser [--profile <name>] [--policy=blocklist] [--mcp]
+  unbrowser [--profile <name>] [--policy=blocklist] [--shims stable|enhanced] [--mcp]
+  unbrowser --version
 
 Examples:
   unbrowser navigate https://news.ycombinator.com --json
@@ -42,49 +40,8 @@ def _is_help_flag(arg: str) -> bool:
 
 
 def _navigate(args: list[str]) -> None:
-    if not args or _is_help_flag(args[0]):
-        _usage()
-        return
-
-    url = args[0]
-    exec_scripts = False
-    passthrough: list[str] = []
-    for arg in args[1:]:
-        if arg == "--exec-scripts":
-            exec_scripts = True
-        elif arg == "--json":
-            continue
-        else:
-            passthrough.append(arg)
-
-    if any(arg == "--mcp" for arg in passthrough):
-        raise SystemExit("unbrowser navigate does not support --mcp")
-
     binary = find_binary()
-    proc = subprocess.Popen(
-        [binary, *passthrough],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        text=True,
-        bufsize=1,
-    )
-    assert proc.stdin is not None and proc.stdout is not None
-    request = {
-        "id": 1,
-        "method": "navigate",
-        "params": {"url": url, "exec_scripts": exec_scripts},
-    }
-    proc.stdin.write(json.dumps(request) + "\n")
-    proc.stdin.flush()
-    line = proc.stdout.readline()
-    if not line:
-        raise SystemExit("unbrowser navigate: binary produced no response")
-    response = json.loads(line)
-    if "error" in response:
-        raise SystemExit(f"unbrowser navigate: {response['error']}")
-    result = response.get("result")
-    print(json.dumps(result))
+    os.execv(binary, ["unbrowser", "navigate", *args])
 
 
 def main() -> None:

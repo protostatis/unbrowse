@@ -333,7 +333,23 @@
             var evalOk = true;
             var evalErr = null;
             if (code) {
-              try { (0, eval)(code); }
+              try {
+                if (typeof __looksLikeModuleSource === 'function' &&
+                    __looksLikeModuleSource(code) &&
+                    typeof __loadModule === 'function') {
+                  return __loadModule(code, url).then(function() {
+                    child.dispatchEvent(new Event('load'));
+                  }).catch(function(e) {
+                    try {
+                      if (typeof globalThis.__unb_dyn_script_error === 'function') {
+                        globalThis.__unb_dyn_script_error(url, String(e && (e.message || e)));
+                      }
+                    } catch (_e) {}
+                    child.dispatchEvent(new Event('error'));
+                  });
+                }
+                (0, eval)(code);
+              }
               catch (e) { evalOk = false; evalErr = e; }
             }
             if (evalOk) {
@@ -488,6 +504,56 @@
     }
   });
 
+  Object.defineProperty(Node.prototype, 'parentElement', {
+    get: function() {
+      return this.parentNode && this.parentNode.nodeType === ELEMENT_NODE ? this.parentNode : null;
+    }
+  });
+
+  function nodeFromArg(arg) {
+    return typeof arg === 'string' ? document.createTextNode(arg) : arg;
+  }
+
+  Node.prototype.append = function() {
+    for (var i = 0; i < arguments.length; i++) this.appendChild(nodeFromArg(arguments[i]));
+  };
+
+  Node.prototype.prepend = function() {
+    var ref = this.firstChild;
+    for (var i = 0; i < arguments.length; i++) {
+      var node = nodeFromArg(arguments[i]);
+      if (ref) this.insertBefore(node, ref);
+      else this.appendChild(node);
+    }
+  };
+
+  Node.prototype.before = function() {
+    if (!this.parentNode) return;
+    for (var i = 0; i < arguments.length; i++) this.parentNode.insertBefore(nodeFromArg(arguments[i]), this);
+  };
+
+  Node.prototype.after = function() {
+    if (!this.parentNode) return;
+    var ref = this.nextSibling;
+    for (var i = 0; i < arguments.length; i++) {
+      var node = nodeFromArg(arguments[i]);
+      if (ref) this.parentNode.insertBefore(node, ref);
+      else this.parentNode.appendChild(node);
+    }
+  };
+
+  Node.prototype.replaceWith = function() {
+    if (!this.parentNode) return;
+    for (var i = 0; i < arguments.length; i++) this.parentNode.insertBefore(nodeFromArg(arguments[i]), this);
+    this.parentNode.removeChild(this);
+  };
+
+  Node.prototype.querySelector = function(sel) { return querySelector(this, sel); };
+  Node.prototype.querySelectorAll = function(sel) { return querySelectorAll(this, sel); };
+  Node.prototype.getElementsByTagName = function(tag) {
+    return Element.prototype.getElementsByTagName.call(this, tag);
+  };
+
   // --- TextNode ---
   function TextNode(text) {
     Node.call(this, TEXT_NODE);
@@ -503,7 +569,8 @@
   // --- Element ---
   function Element(tagName) {
     Node.call(this, ELEMENT_NODE);
-    this.tagName = tagName.toUpperCase();
+    tagName = tagName || 'div';
+    this.tagName = String(tagName).toUpperCase();
     this.nodeName = this.tagName;
     this._attributes = {};
     this.style = new CSSStyleDeclaration(this);
@@ -606,17 +673,7 @@
   TextNode.prototype.remove = function() {
     if (this.parentNode) this.parentNode.removeChild(this);
   };
-  Element.prototype.replaceWith = function() {
-    var parent = this.parentNode;
-    if (!parent) return;
-    var ref = this;
-    for (var i = 0; i < arguments.length; i++) {
-      var node = arguments[i];
-      if (typeof node === 'string') node = document.createTextNode(node);
-      parent.insertBefore(node, ref);
-    }
-    parent.removeChild(this);
-  };
+  Element.prototype.replaceWith = Node.prototype.replaceWith;
 
   Object.defineProperty(Element.prototype, 'id', {
     get: function() { return this._attributes.id || ''; },
@@ -843,6 +900,23 @@
   Object.defineProperty(Element.prototype, 'children', {
     get: function() {
       return this.childNodes.filter(function(c) { return c.nodeType === ELEMENT_NODE; });
+    }
+  });
+
+  Object.defineProperty(Element.prototype, 'content', {
+    get: function() {
+      if (this.tagName !== 'TEMPLATE') return undefined;
+      if (!this._templateContent) {
+        var frag = document.createDocumentFragment();
+        var kids = this.childNodes.slice();
+        this.childNodes = [];
+        for (var i = 0; i < kids.length; i++) {
+          kids[i].parentNode = null;
+          frag.appendChild(kids[i]);
+        }
+        this._templateContent = frag;
+      }
+      return this._templateContent;
     }
   });
 
@@ -1196,6 +1270,8 @@
     createTextNode: function(text) { return new TextNode(text); },
     createComment: function(text) { var n = new Node(COMMENT_NODE); n.textContent = text; return n; },
     createDocumentFragment: function() { var n = new Node(DOCUMENT_FRAGMENT_NODE); n.childNodes = []; return n; },
+    adoptNode: function(node) { if (node) node.ownerDocument = document; return node; },
+    importNode: function(node, deep) { return node && node.cloneNode ? node.cloneNode(!!deep) : node; },
 
     getElementById: function(id) {
       function walk(node) {

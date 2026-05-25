@@ -117,11 +117,14 @@ class Client:
     persists across calls until close().
     """
 
-    def __init__(self, binary: str | None = None):
+    def __init__(self, binary: str | None = None, shim_mode: str | None = None):
         binary_path = binary or find_binary()
+        argv = [binary_path]
+        if shim_mode is not None:
+            argv.extend(["--shims", shim_mode])
         try:
             self._proc = subprocess.Popen(
-                [binary_path],
+                argv,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
@@ -401,7 +404,7 @@ class Client:
         self.close()
 
 
-def navigate(url: str) -> dict:
+def navigate(url: str, exec_scripts: bool = False, shim_mode: str | None = None) -> dict:
     """One-shot: fetch a URL and return the navigate result. Closes immediately."""
-    with Client() as ub:
-        return ub.navigate(url)
+    with Client(shim_mode=shim_mode) as ub:
+        return ub.navigate(url, exec_scripts=exec_scripts)

@@ -18,6 +18,19 @@
 
 (function() {
 
+  var __shimMode = String(globalThis.__UNBROWSER_SHIM_MODE || 'stable').toLowerCase();
+  var __enhancedShims = __shimMode === 'enhanced' || __shimMode === 'experimental';
+  globalThis.__unbrowser_shims = {
+    mode: __enhancedShims ? 'enhanced' : 'stable',
+    features: {
+      contentPositiveObservers: true,
+      enhancedLayout: __enhancedShims,
+      enhancedMediaQueries: __enhancedShims,
+      enhancedScroll: __enhancedShims,
+      enhancedIndexedDB: __enhancedShims,
+    },
+  };
+
   // ---- window / self -----------------------------------------------------
   globalThis.window = globalThis;
   globalThis.self = globalThis;
@@ -366,10 +379,27 @@
     return out;
   }
 
+  globalThis.__looksLikeModuleSource = function(source) {
+    if (!__enhancedShims) return false;
+    source = String(source || '');
+    return /(^|[\n;])\s*import\s+(?:[^'"`;]+?\s+from\s+)?['"][^'"]+['"]\s*;?/.test(source) ||
+           /(^|[\n;])\s*export\s*(?:\*|\{|default|const\s|let\s|var\s|function\s|class\s)/.test(source) ||
+           /\bimport\.meta\b/.test(source) ||
+           /\bimport\s*\(/.test(source) ||
+           source.indexOf('export{') !== -1 ||
+           source.indexOf('export*') !== -1 ||
+           source.indexOf('export default') !== -1;
+  };
+
   // Strip import/export statements from `source` so the remainder
   // evaluates as classic JS. Conservative — matches whole statements
   // ending in semicolon or newline.
   function _stripModuleSyntax(source) {
+    if (__enhancedShims) {
+      var metaUrl = JSON.stringify((globalThis.location && globalThis.location.href) || '');
+      source = source.replace(/\bimport\.meta\b/g, '({ url: ' + metaUrl + ' })');
+      source = source.replace(/\bimport\s*\(/g, '__dynamicImportShim(');
+    }
     // Strip import statements
     source = source.replace(
       /(?:^|\n)\s*import\s+(?:[^'"`;]+?\s+from\s+)?["'][^"']+["']\s*;?/g,
@@ -377,14 +407,31 @@
     );
     // Strip export statements that re-export from other modules
     source = source.replace(
-      /(?:^|\n)\s*export\s+(?:\*|\{[^}]*\})\s+from\s+["'][^"']+["']\s*;?/g,
+      /(^|[;\n])\s*export\s*(?:\*|\{[^}]*\})\s*from\s+["'][^"']+["']\s*;?/g,
+      '$1'
+    );
+    source = source.replace(
+      /(?:^|\n)\s*export\s*(?:\*|\{[^}]*\})\s*from\s+["'][^"']+["']\s*;?/g,
       '\n'
     );
+    if (__enhancedShims) {
+      source = source.replace(/(^|[;\n])\s*export\s*\{[^}]*\}\s*;?/g, '$1');
+      source = source.replace(/(^|[;\n])\s*export\s+default\s+(?=(?:async\s+)?function\s|class\s)/g, '$1');
+      source = source.replace(/(^|[;\n])\s*export\s+default\s+[^;]+;?/g, '$1');
+    }
     // Strip `export ` keyword from `export const/let/var/function/class`
     // — leaves the declaration in place at module (= global) scope.
-    source = source.replace(/(^|\n)\s*export\s+(default\s+)?/g, '$1');
+    source = source.replace(/(^|\n)\s*export\s+/g, '$1');
     return source;
   }
+
+  globalThis.__dynamicImportShim = function(spec) {
+    if (typeof spec === 'string') {
+      var resolved = _resolveModuleSpecifier(spec, (globalThis.location && globalThis.location.href) || '');
+      if (resolved) return globalThis.__loadModuleByURL(resolved).then(function() { return {}; });
+    }
+    return Promise.resolve({});
+  };
 
   // Resolve a module specifier against the importer's URL.
   // Returns null for bare specifiers (e.g. 'react') — we don't have
@@ -422,7 +469,7 @@
       if (!resolved) continue; // bare or CSS — skipped
       depPromises.push(globalThis.__loadModuleByURL(resolved));
     }
-    return Promise.all(depPromises).then(function() {
+    function evalCleanedModule() {
       var cleaned = _stripModuleSyntax(source);
       try { (0, eval)(cleaned); } catch (e) {
         // Surface to driver via the dynamic-script error hook if installed.
@@ -432,7 +479,16 @@
         }
         throw e;
       }
-    });
+    }
+    if (depPromises.length === 0) {
+      try {
+        evalCleanedModule();
+        return Promise.resolve();
+      } catch (e) {
+        return Promise.reject(e);
+      }
+    }
+    return Promise.all(depPromises).then(evalCleanedModule);
   };
 
   // Load a module by URL. Caches by URL — re-requests resolve to the
@@ -1262,14 +1318,421 @@
   globalThis.window.onunload = null;
   globalThis.window.onbeforeunload = null;
 
+  // ---- Enhanced runtime-fidelity shims (opt-in via --shims=enhanced) -----
+  // These intentionally make content-positive guesses that require a layout
+  // engine in real browsers. Keep them behind a mode switch so corpus A/B runs
+  // can compare current stable behavior against richer browser-environment
+  // fidelity without changing the default path.
+  if (__enhancedShims) {
+    var ENH_VIEWPORT_W = Number(globalThis.innerWidth) || 1440;
+    var ENH_VIEWPORT_H = Number(globalThis.innerHeight) || 800;
+
+    function dashStyle(el, name) {
+      if (!el || !el.style) return '';
+      try {
+        if (typeof el.style.getPropertyValue === 'function') {
+          var v = el.style.getPropertyValue(name);
+          if (v) return String(v);
+        }
+      } catch (e) {}
+      return '';
+    }
+
+    function attrPx(el, name) {
+      if (!el || typeof el.getAttribute !== 'function') return 0;
+      var raw = el.getAttribute(name) || dashStyle(el, name);
+      if (!raw) return 0;
+      var n = parseFloat(String(raw));
+      return isFinite(n) && n > 0 ? n : 0;
+    }
+
+    function hiddenByStyle(el) {
+      if (!el || typeof el.getAttribute !== 'function') return false;
+      if (el.hasAttribute && el.hasAttribute('hidden')) return true;
+      var style = String(el.getAttribute('style') || '').toLowerCase().replace(/\s+/g, '');
+      return style.indexOf('display:none') !== -1 ||
+             style.indexOf('visibility:hidden') !== -1 ||
+             style.indexOf('opacity:0') !== -1;
+    }
+
+    function tagDefaultRect(el) {
+      var tag = (el && el.tagName || '').toLowerCase();
+      if (tag === 'html' || tag === 'body' || tag === 'main' || tag === 'section' || tag === 'article') {
+        return { width: ENH_VIEWPORT_W, height: Math.max(ENH_VIEWPORT_H, 600) };
+      }
+      if (tag === 'img' || tag === 'canvas' || tag === 'video') return { width: 300, height: 180 };
+      if (tag === 'input' || tag === 'select' || tag === 'textarea') return { width: 240, height: 36 };
+      if (tag === 'button') return { width: 120, height: 36 };
+      if (tag === 'a' || tag === 'span' || tag === 'strong' || tag === 'em') return { width: 120, height: 20 };
+      if (tag === 'tr') return { width: ENH_VIEWPORT_W, height: 32 };
+      if (tag === 'td' || tag === 'th') return { width: 160, height: 32 };
+      return { width: Math.min(ENH_VIEWPORT_W, 720), height: 24 };
+    }
+
+    function syntheticElementRect(el) {
+      if (hiddenByStyle(el)) return { x: 0, y: 0, width: 0, height: 0, top: 0, left: 0, right: 0, bottom: 0 };
+      var def = tagDefaultRect(el);
+      var textLen = 0;
+      try { textLen = String(el && el.textContent || '').replace(/\s+/g, ' ').trim().length; } catch (e) {}
+      var childCount = (el && el.childNodes && el.childNodes.length) || 0;
+      var width = attrPx(el, 'width') || def.width;
+      var height = attrPx(el, 'height') || def.height;
+      if (!attrPx(el, 'height')) {
+        var textHeight = Math.ceil(Math.max(textLen, 1) / 90) * 20;
+        var childHeight = childCount > 0 ? Math.min(1200, childCount * 24) : 0;
+        height = Math.max(height, textHeight, childHeight);
+      }
+      width = Math.max(1, Math.min(ENH_VIEWPORT_W, Math.round(width)));
+      height = Math.max(1, Math.round(height));
+      return {
+        x: 0,
+        y: 0,
+        width: width,
+        height: height,
+        top: 0,
+        left: 0,
+        right: width,
+        bottom: height,
+        toJSON: function() { return this; },
+      };
+    }
+
+    if (typeof globalThis.DOMRect === 'undefined') {
+      globalThis.DOMRect = function(x, y, width, height) {
+        this.x = x || 0; this.y = y || 0; this.width = width || 0; this.height = height || 0;
+        this.top = this.y; this.left = this.x; this.right = this.x + this.width; this.bottom = this.y + this.height;
+      };
+      globalThis.DOMRect.fromRect = function(r) { return new DOMRect(r && r.x, r && r.y, r && r.width, r && r.height); };
+    }
+
+    if (globalThis.Element && globalThis.Element.prototype) {
+      globalThis.Element.prototype.getBoundingClientRect = function() { return syntheticElementRect(this); };
+      globalThis.Element.prototype.getClientRects = function() { return [this.getBoundingClientRect()]; };
+      ['offsetWidth', 'clientWidth', 'scrollWidth'].forEach(function(prop) {
+        Object.defineProperty(globalThis.Element.prototype, prop, {
+          configurable: true,
+          get: function() { return Math.round(this.getBoundingClientRect().width || 0); }
+        });
+      });
+      ['offsetHeight', 'clientHeight', 'scrollHeight'].forEach(function(prop) {
+        Object.defineProperty(globalThis.Element.prototype, prop, {
+          configurable: true,
+          get: function() { return Math.round(this.getBoundingClientRect().height || 0); }
+        });
+      });
+      globalThis.Element.prototype.scrollIntoView = function() {
+        setScroll(globalThis.scrollX || 0, 0);
+      };
+    }
+
+    function mediaMatches(query) {
+      query = String(query || '').toLowerCase();
+      if (!query || query === 'all') return true;
+      if (query.indexOf('not all') !== -1) return false;
+      var m;
+      m = query.match(/min-width\s*:\s*(\d+)px/);
+      if (m && ENH_VIEWPORT_W < Number(m[1])) return false;
+      m = query.match(/max-width\s*:\s*(\d+)px/);
+      if (m && ENH_VIEWPORT_W > Number(m[1])) return false;
+      m = query.match(/min-height\s*:\s*(\d+)px/);
+      if (m && ENH_VIEWPORT_H < Number(m[1])) return false;
+      m = query.match(/max-height\s*:\s*(\d+)px/);
+      if (m && ENH_VIEWPORT_H > Number(m[1])) return false;
+      if (query.indexOf('orientation: portrait') !== -1 && ENH_VIEWPORT_W >= ENH_VIEWPORT_H) return false;
+      if (query.indexOf('orientation: landscape') !== -1 && ENH_VIEWPORT_W < ENH_VIEWPORT_H) return false;
+      if (query.indexOf('prefers-color-scheme: dark') !== -1) return false;
+      if (query.indexOf('prefers-color-scheme: light') !== -1) return true;
+      if (query.indexOf('prefers-reduced-motion: reduce') !== -1) return false;
+      if (query.indexOf('prefers-reduced-motion: no-preference') !== -1) return true;
+      if (query.indexOf('hover: hover') !== -1 || query.indexOf('any-hover: hover') !== -1) return true;
+      if (query.indexOf('pointer: fine') !== -1 || query.indexOf('any-pointer: fine') !== -1) return true;
+      if (query.indexOf('display-mode: browser') !== -1) return true;
+      return true;
+    }
+
+    globalThis.matchMedia = function(query) {
+      var listeners = [];
+      var mql = {
+        matches: mediaMatches(query),
+        media: String(query || ''),
+        onchange: null,
+        addListener: function(fn) { if (listeners.indexOf(fn) === -1) listeners.push(fn); },
+        removeListener: function(fn) { listeners = listeners.filter(function(f) { return f !== fn; }); },
+        addEventListener: function(type, fn) { if (type === 'change') this.addListener(fn); },
+        removeEventListener: function(type, fn) { if (type === 'change') this.removeListener(fn); },
+        dispatchEvent: function(ev) {
+          if (typeof this.onchange === 'function') this.onchange(ev || this);
+          for (var i = 0; i < listeners.length; i++) listeners[i](ev || this);
+          return true;
+        },
+      };
+      return mql;
+    };
+
+    function setScroll(x, y) {
+      globalThis.scrollX = globalThis.pageXOffset = Math.max(0, Number(x) || 0);
+      globalThis.scrollY = globalThis.pageYOffset = Math.max(0, Number(y) || 0);
+      try { window.dispatchEvent(new Event('scroll')); } catch (e) {}
+      try { document.dispatchEvent(new Event('scroll')); } catch (e) {}
+    }
+    globalThis.scrollTo = function(x, y) {
+      if (typeof x === 'object') setScroll(x.left || x.x || 0, x.top || x.y || 0);
+      else setScroll(x, y);
+    };
+    globalThis.scrollBy = function(x, y) {
+      if (typeof x === 'object') setScroll((globalThis.scrollX || 0) + (x.left || x.x || 0), (globalThis.scrollY || 0) + (x.top || x.y || 0));
+      else setScroll((globalThis.scrollX || 0) + (Number(x) || 0), (globalThis.scrollY || 0) + (Number(y) || 0));
+    };
+    globalThis.scroll = globalThis.scrollTo;
+
+    globalThis.requestAnimationFrame = function(cb) {
+      return setTimeout(function() { if (typeof cb === 'function') cb(performance.now()); }, 16);
+    };
+    globalThis.requestIdleCallback = function(cb) {
+      return setTimeout(function() {
+        if (typeof cb === 'function') cb({ didTimeout: false, timeRemaining: function() { return 50; } });
+      }, 1);
+    };
+
+    if (globalThis.document) {
+      Object.defineProperty(document, 'hidden', { configurable: true, get: function() { return false; } });
+      Object.defineProperty(document, 'visibilityState', { configurable: true, get: function() { return 'visible'; } });
+      document.hasFocus = function() { return true; };
+      document.elementFromPoint = function() { return document.body || document.documentElement; };
+      document.elementsFromPoint = function() { return [document.body || document.documentElement].filter(Boolean); };
+    }
+
+    globalThis.navigator.connection = globalThis.navigator.connection || {
+      effectiveType: '4g',
+      rtt: 50,
+      downlink: 10,
+      saveData: false,
+      addEventListener: function() {},
+      removeEventListener: function() {},
+    };
+    globalThis.navigator.mediaDevices = globalThis.navigator.mediaDevices || {
+      enumerateDevices: function() { return Promise.resolve([]); },
+      getUserMedia: function() { return Promise.reject(new Error('media devices unavailable')); },
+    };
+
+    (function installIndexedDBStub() {
+      var dbs = {};
+      function requestSuccess(req, result, extra) {
+        setTimeout(function() {
+          req.result = result;
+          if (extra && typeof req.onupgradeneeded === 'function') {
+            try { req.onupgradeneeded({ target: req, oldVersion: extra.oldVersion || 0, newVersion: extra.newVersion || 1 }); } catch (e) {}
+          }
+          if (typeof req.onsuccess === 'function') {
+            try { req.onsuccess({ target: req }); } catch (e) {}
+          }
+        }, 0);
+        return req;
+      }
+      function makeRequest(result) {
+        var req = { result: undefined, error: null, onsuccess: null, onerror: null };
+        return requestSuccess(req, result || null);
+      }
+      function makeStore(db, name) {
+        if (!db._stores[name]) db._stores[name] = { data: {}, indexes: {} };
+        var backing = db._stores[name];
+        return {
+          name: name,
+          get: function(key) { return makeRequest(backing.data[String(key)] || undefined); },
+          getAll: function() { var out = []; for (var k in backing.data) out.push(backing.data[k]); return makeRequest(out); },
+          put: function(value, key) { backing.data[String(key || (value && value.id) || Date.now())] = value; return makeRequest(key); },
+          add: function(value, key) { return this.put(value, key); },
+          delete: function(key) { delete backing.data[String(key)]; return makeRequest(undefined); },
+          clear: function() { backing.data = {}; return makeRequest(undefined); },
+          count: function() { return makeRequest(Object.keys(backing.data).length); },
+          createIndex: function(indexName) { backing.indexes[indexName] = true; return {}; },
+          index: function() { return this; },
+        };
+      }
+      function makeDb(name, version) {
+        var db = dbs[name] || { name: name, version: version || 1, _stores: {} };
+        dbs[name] = db;
+        db.objectStoreNames = {
+          contains: function(storeName) { return !!db._stores[storeName]; },
+          item: function(i) { return Object.keys(db._stores)[i] || null; },
+          get length() { return Object.keys(db._stores).length; },
+        };
+        db.createObjectStore = function(storeName) { return makeStore(db, storeName); };
+        db.deleteObjectStore = function(storeName) { delete db._stores[storeName]; };
+        db.transaction = function(storeNames) {
+          var names = Array.isArray(storeNames) ? storeNames : [storeNames];
+          return {
+            objectStore: function(storeName) { return makeStore(db, storeName || names[0]); },
+            oncomplete: null,
+            onerror: null,
+            abort: function() {},
+          };
+        };
+        db.close = function() {};
+        return db;
+      }
+      globalThis.indexedDB = {
+        open: function(name, version) {
+          var old = dbs[name] ? dbs[name].version : 0;
+          var db = makeDb(String(name || 'default'), Number(version) || old || 1);
+          var req = { result: undefined, error: null, onsuccess: null, onerror: null, onupgradeneeded: null };
+          return requestSuccess(req, db, { oldVersion: old, newVersion: db.version });
+        },
+        deleteDatabase: function(name) { delete dbs[String(name || 'default')]; return makeRequest(undefined); },
+        cmp: function(a, b) { return a < b ? -1 : a > b ? 1 : 0; },
+      };
+    })();
+
+    (function installCustomElementsShim() {
+      if (!globalThis.document || !globalThis.Element || globalThis.customElements) return;
+      var registry = {};
+      var waiters = {};
+      var nativeCreateElement = document.createElement.bind(document);
+
+      function lowerName(name) { return String(name || '').toLowerCase(); }
+
+      function safeSetPrototype(el, proto) {
+        if (!el || !proto || typeof Object.setPrototypeOf !== 'function') return;
+        try { Object.setPrototypeOf(el, proto); } catch (e) {}
+      }
+
+      function ensureElementShape(el, name) {
+        if (!el) return nativeCreateElement(name || 'div');
+        if (!el.childNodes) el.childNodes = [];
+        if (!el._attributes) el._attributes = {};
+        if (!el.style) el.style = nativeCreateElement('div').style;
+        if (!el.classList) el.classList = nativeCreateElement('div').classList;
+        if (!el.dataset) el.dataset = {};
+        el.tagName = String(name || el.tagName || 'div').toUpperCase();
+        el.nodeName = el.tagName;
+        el.nodeType = 1;
+        return el;
+      }
+
+      function constructElement(name, Ctor) {
+        try {
+          var el = Reflect.construct(Ctor, [], Ctor);
+          return ensureElementShape(el, name);
+        } catch (e) {
+          var fallback = nativeCreateElement(name);
+          safeSetPrototype(fallback, Ctor && Ctor.prototype);
+          return ensureElementShape(fallback, name);
+        }
+      }
+
+      function maybeCallConnected(el) {
+        if (!el || el.__unb_connected_callback_called) return;
+        if (typeof el.connectedCallback === 'function') {
+          el.__unb_connected_callback_called = true;
+          try { el.connectedCallback(); } catch (e) {}
+        }
+      }
+
+      function upgradeElement(el, name) {
+        name = lowerName(name || (el && el.tagName));
+        var def = registry[name];
+        if (!el || !def) return el;
+        if (!el.__unb_custom_upgraded) {
+          safeSetPrototype(el, def.ctor.prototype);
+          el.__unb_custom_upgraded = name;
+          var observed = def.ctor.observedAttributes || [];
+          if (typeof def.ctor.observedAttributes === 'function') {
+            try { observed = def.ctor.observedAttributes() || []; } catch (e) { observed = []; }
+          }
+          if (typeof el.attributeChangedCallback === 'function') {
+            for (var i = 0; i < observed.length; i++) {
+              var attr = String(observed[i]);
+              if (el.hasAttribute && el.hasAttribute(attr)) {
+                try { el.attributeChangedCallback(attr, null, el.getAttribute(attr)); } catch (e) {}
+              }
+            }
+          }
+        }
+        if (el.parentNode) maybeCallConnected(el);
+        return el;
+      }
+
+      function upgradeTree(root) {
+        if (!root) return;
+        if (root.tagName) upgradeElement(root, root.tagName);
+        var all = root.getElementsByTagName ? root.getElementsByTagName('*') : [];
+        for (var i = 0; i < all.length; i++) upgradeElement(all[i], all[i].tagName);
+      }
+
+      document.createElement = function(name) {
+        name = lowerName(name || 'div');
+        var def = registry[name];
+        if (def) return constructElement(name, def.ctor);
+        return nativeCreateElement(name);
+      };
+
+      globalThis.customElements = {
+        define: function(name, ctor) {
+          name = lowerName(name);
+          if (!name || registry[name]) return;
+          registry[name] = { ctor: ctor };
+          upgradeTree(document.documentElement);
+          var list = waiters[name] || [];
+          delete waiters[name];
+          for (var i = 0; i < list.length; i++) list[i](ctor);
+        },
+        get: function(name) {
+          var def = registry[lowerName(name)];
+          return def && def.ctor;
+        },
+        whenDefined: function(name) {
+          name = lowerName(name);
+          var def = registry[name];
+          if (def) return Promise.resolve(def.ctor);
+          return new Promise(function(resolve) {
+            if (!waiters[name]) waiters[name] = [];
+            waiters[name].push(resolve);
+          });
+        },
+        upgrade: function(root) { upgradeTree(root); },
+      };
+
+      if (globalThis.Node && globalThis.Node.prototype) {
+        var nativeAppendChild = Node.prototype.appendChild;
+        Node.prototype.appendChild = function(child) {
+          var out = nativeAppendChild.call(this, child);
+          upgradeTree(child);
+          maybeCallConnected(child);
+          return out;
+        };
+        var nativeInsertBefore = Node.prototype.insertBefore;
+        Node.prototype.insertBefore = function(child, ref) {
+          var out = nativeInsertBefore.call(this, child, ref);
+          upgradeTree(child);
+          maybeCallConnected(child);
+          return out;
+        };
+      }
+
+      if (globalThis.Element && Element.prototype && !Element.prototype.attachShadow) {
+        Element.prototype.attachShadow = function(init) {
+          if (this.shadowRoot) return this.shadowRoot;
+          var root = nativeCreateElement('shadow-root');
+          root.host = this;
+          root.mode = (init && init.mode) || 'open';
+          this.shadowRoot = root;
+          try { this.appendChild(root); } catch (e) {}
+          return root;
+        };
+      }
+    })();
+  }
+
   // ---- Misc utilities / crash-prevention stubs --------------------------
   globalThis.structuredClone = function(obj) { return JSON.parse(JSON.stringify(obj)); };
   globalThis.alert = function(msg) { /* no-op */ };
   globalThis.confirm = function() { return false; };
   globalThis.prompt = function() { return null; };
-  globalThis.scroll = function() {};
-  globalThis.scrollTo = function() {};
-  globalThis.scrollBy = function() {};
+  if (!__enhancedShims) {
+    globalThis.scroll = function() {};
+    globalThis.scrollTo = function() {};
+    globalThis.scrollBy = function() {};
+  }
   globalThis.focus = function() {};
   globalThis.blur = function() {};
   globalThis.print = function() {};
