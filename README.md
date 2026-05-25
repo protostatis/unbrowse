@@ -231,6 +231,7 @@ Every blocked navigate returns a `challenge` field naming the vendor (`perimeter
 For fully transparent cookie handoff, run the local-only solver service backed by `unchained-cli`:
 
 ```bash
+pip install 'pyunbrowser[solver]'  # or: pip install unchainedsky-cli
 python scripts/cookie_service.py --headless --profile unbrowser-cookie-service
 export UNBROWSER_COOKIE_SERVICE_URL=http://127.0.0.1:8765
 ```
@@ -242,6 +243,15 @@ detect challenge -> call local service -> Chrome obtains cookies -> cookies_set 
 ```
 
 The service exposes `GET /.well-known/unbrowser-cookie-solver` and `POST /solve`, supports the same challenge providers as `navigate.challenge`, and returns only cookies from the user's local Chrome/unchained session. It does not fabricate challenge tokens. Keep it bound to `127.0.0.1`, use `--allow-host` for domain allowlisting when desired, and use `--no-headless --stealth` for sites that reject headless Chrome. Solves are serialized per service process because a service instance owns one CDP port/profile pair.
+
+When installed from the Python package, the same pieces are bundled behind the console wrapper:
+
+```bash
+unbrowser cookie-service --headless --profile unbrowser-cookie-service
+unbrowser router https://example.com/protected
+```
+
+`unbrowser router` also auto-starts the local cookie service on first challenge when `unchained` is available and `UNBROWSER_COOKIE_SERVICE_URL` is not set. `--allow-host example.com` allows `example.com` and its subdomains only; broad single-label suffixes like `com` are rejected.
 
 ## SPA-detection diagnostics
 

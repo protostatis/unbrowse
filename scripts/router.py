@@ -35,9 +35,13 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import socket
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable
 import urllib.error
 import urllib.request
@@ -53,6 +57,9 @@ class RouterConfig:
     chrome_solver: Solver | None = None
     cookie_service_url: str | None = None
     cookie_service_timeout: float = 90.0
+    auto_start_cookie_service: bool = True
+    cookie_service_unchained: str = "unchained"
+    cookie_service_headless: bool = True
     max_escalations: int = 1     # avoid infinite loops on permanently-blocked sites
     verbose: bool = True
 
@@ -72,6 +79,7 @@ class Router:
             or ""
         ).rstrip("/")
         self._cookie_service_caps: dict | None = None
+        self._cookie_service_proc: subprocess.Popen | None = None
         self._proc = subprocess.Popen(
             [config.binary],
             cwd=config.cwd,
@@ -123,6 +131,8 @@ class Router:
                 f"clearance_cookie={challenge.get('clearance_cookie')} "
                 f"matched={challenge.get('matched')}"
             )
+            if self.cfg.chrome_solver is None and not self._cookie_service_url:
+                self._maybe_start_cookie_service()
             if self.cfg.chrome_solver is None and not self._cookie_service_url:
                 raise RouterError(
                     f"challenge from {challenge['provider']} but no chrome_solver "
@@ -201,6 +211,7 @@ class Router:
             self._proc.wait(timeout=2)
         except subprocess.TimeoutExpired:
             self._proc.kill()
+        self._stop_cookie_service()
 
     def __enter__(self) -> "Router":
         return self
@@ -257,6 +268,83 @@ class Router:
             self._log(f"cookie service capability check failed; trying solve anyway: {exc}")
             self._cookie_service_caps = {}
         return self._cookie_service_caps
+
+    def _maybe_start_cookie_service(self) -> None:
+        if not self.cfg.auto_start_cookie_service:
+            return
+        if shutil.which(self.cfg.cookie_service_unchained) is None:
+            self._log(f"cookie service auto-start skipped: {self.cfg.cookie_service_unchained!r} not found")
+            return
+        service_script = _cookie_service_script()
+        if service_script is None:
+            self._log("cookie service auto-start skipped: cookie_service.py not found")
+            return
+
+        port = _free_port()
+        cdp_port = _free_port()
+        profile = f"unbrowser-router-{os.getpid()}-{port}"
+        cmd = [
+            sys.executable,
+            str(service_script),
+            "--port",
+            str(port),
+            "--cdp-port",
+            str(cdp_port),
+            "--profile",
+            profile,
+            "--unchained",
+            self.cfg.cookie_service_unchained,
+            "--no-keep-chrome",
+            "--max-wait-seconds",
+            str(int(self.cfg.cookie_service_timeout)),
+            "--quiet",
+        ]
+        if self.cfg.cookie_service_headless:
+            cmd.append("--headless")
+        else:
+            cmd.extend(["--no-headless", "--stealth"])
+
+        self._cookie_service_proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+        self._cookie_service_url = f"http://127.0.0.1:{port}"
+        try:
+            self._wait_for_cookie_service()
+            self._log(f"auto-started cookie service at {self._cookie_service_url}")
+        except RouterError as exc:
+            self._log(f"cookie service auto-start failed: {exc}")
+            self._stop_cookie_service()
+            self._cookie_service_url = ""
+
+    def _wait_for_cookie_service(self) -> None:
+        deadline = time.time() + min(self.cfg.cookie_service_timeout, 15.0)
+        last_error = "not ready"
+        while time.time() < deadline:
+            if self._cookie_service_proc and self._cookie_service_proc.poll() is not None:
+                raise RouterError("cookie service exited during startup")
+            try:
+                ready = _get_json(f"{self._cookie_service_url}/readyz", timeout=1.0)
+                if ready.get("ok"):
+                    return
+                last_error = str(ready)
+            except RouterError as exc:
+                last_error = str(exc)
+            time.sleep(0.1)
+        raise RouterError(last_error)
+
+    def _stop_cookie_service(self) -> None:
+        proc = self._cookie_service_proc
+        self._cookie_service_proc = None
+        if proc is None or proc.poll() is not None:
+            return
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
 
 
 # =============================================================================
@@ -369,6 +457,22 @@ def _cookie_list(payload: object) -> list[dict]:
     return []
 
 
+def _cookie_service_script() -> Path | None:
+    candidate = Path(__file__).resolve().with_name("cookie_service.py")
+    if candidate.is_file():
+        return candidate
+    return None
+
+
+def _free_port() -> int:
+    s = socket.socket()
+    try:
+        s.bind(("127.0.0.1", 0))
+        return int(s.getsockname()[1])
+    finally:
+        s.close()
+
+
 def _get_json(url: str, timeout: float) -> dict:
     try:
         with urllib.request.urlopen(url, timeout=timeout) as resp:
@@ -430,25 +534,16 @@ def _demo() -> None:
                         help="Path to a cached cookies JSON file (CDP or ub format)")
     parser.add_argument("--cookie-service", default=None,
                         help="Local cookie service URL (or UNBROWSER_COOKIE_SERVICE_URL)")
+    parser.add_argument("--no-auto-cookie-service", action="store_true",
+                        help="Do not auto-start the local cookie service when unchained is available")
+    parser.add_argument("--no-headless-cookie-service", action="store_true",
+                        help="Auto-start the cookie service in headful stealth mode")
     parser.add_argument("--binary", default=None,
-                        help="Path to the unbrowser binary (default: cargo run --quiet)")
+                        help="Path to the unbrowser binary (default: packaged/dev binary)")
     args = parser.parse_args()
 
-    binary = args.binary or os.path.expanduser("~/.cargo/bin/cargo")
-    if "cargo" in binary:
-        # cargo path — need to use it as the launcher and cd into the project.
-        env_cmd = [binary, "run", "--quiet"]
-        cwd = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        # Spawn manually since RouterConfig only takes single binary.
-        # Easiest: pre-build with cargo, then exec the binary directly.
-        target = os.path.join(cwd, "target", "debug", "unbrowser")
-        if not os.path.exists(target):
-            print(f"[demo] building binary at {target} ...")
-            subprocess.run([binary, "build", "--quiet"], cwd=cwd, check=True)
-        binary = target
-        cwd = None
-    else:
-        cwd = None
+    binary = args.binary or _default_unbrowser_binary()
+    cwd = None
 
     solver = cached_cookies_solver(args.cookies) if args.cookies else None
     cfg = RouterConfig(
@@ -456,6 +551,8 @@ def _demo() -> None:
         cwd=cwd,
         chrome_solver=solver,
         cookie_service_url=args.cookie_service,
+        auto_start_cookie_service=not args.no_auto_cookie_service,
+        cookie_service_headless=not args.no_headless_cookie_service,
     )
 
     with Router(cfg) as r:
@@ -470,6 +567,18 @@ def _demo() -> None:
         print(f"  structure  : {len(bm.get('structure', []))} blocks, "
               f"{len(bm.get('headings', []))} headings, "
               f"{bm.get('interactives', {}).get('links', 0)} links")
+
+def _default_unbrowser_binary() -> str:
+    try:
+        from unbrowser import find_binary
+
+        return find_binary()
+    except Exception:
+        repo = Path(__file__).resolve().parents[1]
+        target = repo / "target" / "debug" / "unbrowser"
+        if not target.exists():
+            subprocess.run(["cargo", "build", "--quiet"], cwd=repo, check=True)
+        return str(target)
 
 
 if __name__ == "__main__":

@@ -37,6 +37,11 @@ Homepage = "https://github.com/protostatis/unbrowser"
 Repository = "https://github.com/protostatis/unbrowser"
 Issues = "https://github.com/protostatis/unbrowser/issues"
 
+[project.optional-dependencies]
+# Installs the local Chrome/CDP helper used by `unbrowser cookie-service` and
+# the router's transparent challenge-cookie handoff path.
+solver = ["unchainedsky-cli"]
+
 # `pip install pyunbrowser` installs an `unbrowser` script on $PATH that
 # execs the bundled native binary. Lets MCP hosts use `command: "unbrowser"`
 # without knowing the wheel's site-packages path.
@@ -62,9 +67,17 @@ pure-python = false
 # because a source distribution must be platform-neutral.
 # Suppress hatchling's "did you mean to mark this as platform-specific?"
 # nag — yes, we did, deliberately, for the bundled binary.
+[tool.hatch.build.targets.wheel.force-include]
+"../scripts/cookie_service.py" = "unbrowser/cookie_service.py"
+"../scripts/router.py" = "unbrowser/router.py"
+
 [tool.hatch.metadata]
 allow-direct-references = true
 
 [tool.hatch.build.targets.sdist]
 include = ["unbrowser/", "README.md", "LICENSE"]
 exclude = ["unbrowser/_bin/"]
+
+[tool.hatch.build.targets.sdist.force-include]
+"../scripts/cookie_service.py" = "unbrowser/cookie_service.py"
+"../scripts/router.py" = "unbrowser/router.py"

@@ -15,6 +15,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.request
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -110,8 +111,6 @@ def free_port() -> int:
 
 
 def wait_health(url: str, timeout: float = 10.0) -> None:
-    import urllib.request
-
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
@@ -121,6 +120,11 @@ def wait_health(url: str, timeout: float = 10.0) -> None:
         except Exception:
             time.sleep(0.1)
     raise AssertionError("cookie service did not become healthy")
+
+
+def get_json(url: str) -> dict:
+    with urllib.request.urlopen(url, timeout=5) as resp:
+        return json.loads(resp.read().decode("utf-8"))
 
 
 def check(label: str, condition: bool) -> bool:
@@ -169,6 +173,10 @@ def main() -> int:
     ok = True
     try:
         wait_health(service_url)
+        caps = get_json(service_url + "/.well-known/unbrowser-cookie-solver")
+        ready = get_json(service_url + "/readyz")
+        ok &= check("capabilities include protocol_version", caps.get("protocol_version") == 1)
+        ok &= check("service readiness is ok", ready.get("ok") is True)
         with Router(
             RouterConfig(
                 binary=str(BIN),
@@ -185,6 +193,21 @@ def main() -> int:
         ok &= check("headless Chrome sent fake PX payload", len(collector_payloads) == 1)
         if collector_payloads:
             ok &= check("stealth hid webdriver", collector_payloads[0].get("webdriver") is False)
+
+        collector_payloads.clear()
+        with Router(
+            RouterConfig(
+                binary=str(BIN),
+                cookie_service_timeout=30,
+                auto_start_cookie_service=True,
+                verbose=False,
+            )
+        ) as router:
+            result = router.navigate(target)
+        bm = result.get("blockmap") or {}
+        ok &= check("router auto-start returns cleared page", result.get("status") == 200)
+        ok &= check("auto-start challenge is gone", result.get("challenge") is None)
+        ok &= check("auto-start title returned", bm.get("title") == "PX Cleared")
     finally:
         service.terminate()
         try:

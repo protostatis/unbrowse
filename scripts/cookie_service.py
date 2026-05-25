@@ -14,9 +14,12 @@ Protocol:
 from __future__ import annotations
 
 import argparse
+import atexit
+import ipaddress
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -60,6 +63,8 @@ class Config:
     wait_timeout: float = 5.0
     max_wait_seconds: float = 45.0
     poll_interval: float = 0.5
+    max_queue: int = 4
+    request_timeout: float = 15.0
     providers: list[str] = field(default_factory=lambda: list(DEFAULT_PROVIDERS))
     allow_hosts: list[str] = field(default_factory=list)
     verbose: bool = True
@@ -74,11 +79,13 @@ class CookieSolver:
         self.cfg = cfg
         self._owns_chrome = False
         self._solve_lock = threading.Lock()
+        self._solve_slots = threading.BoundedSemaphore(max(1, cfg.max_queue))
 
     def capabilities(self) -> dict[str, Any]:
         return {
             "name": "local-unchained-cookie-solver",
             "version": 1,
+            "protocol_version": 1,
             "providers": self.cfg.providers,
             "cookie_export": True,
             "requires_user_browser": True,
@@ -88,6 +95,30 @@ class CookieSolver:
             "cdp_port": self.cfg.cdp_port,
         }
 
+    def readiness(self) -> dict[str, Any]:
+        found = shutil.which(self.cfg.unchained) is not None
+        callable_ok = False
+        if found:
+            try:
+                out = subprocess.run(
+                    [self.cfg.unchained, "--help"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                callable_ok = out.returncode == 0
+            except (OSError, subprocess.TimeoutExpired):
+                callable_ok = False
+        ok = found and callable_ok
+        return {
+            "ok": ok,
+            "unchained": found,
+            "unchained_callable": callable_ok,
+            "providers": self.cfg.providers,
+            "headless": self.cfg.headless,
+            "stealth": self.cfg.stealth or self.cfg.headless,
+        }
+
     def solve(
         self,
         url: str,
@@ -95,8 +126,13 @@ class CookieSolver:
         clearance_cookie: str | None = None,
         wait_seconds: float | None = None,
     ) -> dict[str, Any]:
-        with self._solve_lock:
-            return self._solve_locked(url, provider, clearance_cookie, wait_seconds)
+        if not self._solve_slots.acquire(blocking=False):
+            raise SolveError("solve queue is full; retry later")
+        try:
+            with self._solve_lock:
+                return self._solve_locked(url, provider, clearance_cookie, wait_seconds)
+        finally:
+            self._solve_slots.release()
 
     def _solve_locked(
         self,
@@ -122,7 +158,9 @@ class CookieSolver:
                     break
                 time.sleep(self.cfg.poll_interval)
 
-            normalized = [_normalize_cookie(c, parsed.hostname or "") for c in cookies]
+            normalized = [
+                c for c in (_normalize_cookie(c, parsed.hostname or "") for c in cookies) if c
+            ]
             cookie_names = sorted({c["name"] for c in normalized})
             if clearance_cookie and clearance_cookie not in cookie_names:
                 raise SolveError(
@@ -252,12 +290,19 @@ class CookieSolver:
 
 def make_handler(solver: CookieSolver):
     class Handler(BaseHTTPRequestHandler):
+        def setup(self):
+            super().setup()
+            self.request.settimeout(solver.cfg.request_timeout)
+
         def do_GET(self):
             if self.path == CAPABILITY_PATH:
                 self._json(200, solver.capabilities())
                 return
             if self.path == "/healthz":
                 self._json(200, {"ok": True})
+                return
+            if self.path == "/readyz":
+                self._json(200, solver.readiness())
                 return
             self._json(404, {"ok": False, "error": "not found"})
 
@@ -309,9 +354,12 @@ def make_handler(solver: CookieSolver):
     return Handler
 
 
-def _normalize_cookie(c: dict[str, Any], fallback_host: str) -> dict[str, Any]:
+def _normalize_cookie(c: dict[str, Any], fallback_host: str) -> dict[str, Any] | None:
+    name = c.get("name")
+    if not isinstance(name, str) or not name:
+        return None
     return {
-        "name": c["name"],
+        "name": name,
         "value": c.get("value", ""),
         "domain": c.get("domain") or fallback_host,
         "path": c.get("path") or "/",
@@ -327,6 +375,29 @@ def _host_allowed(host: str, allow_hosts: list[str]) -> bool:
         if host == a or host.endswith("." + a):
             return True
     return False
+
+
+def _validate_allow_hosts(allow_hosts: list[str]) -> list[str]:
+    out: list[str] = []
+    for raw in allow_hosts:
+        host = raw.lower().strip().strip(".")
+        if not host:
+            raise SolveError("--allow-host must not be empty")
+        if host == "localhost":
+            out.append(host)
+            continue
+        try:
+            ipaddress.ip_address(host)
+            out.append(host)
+            continue
+        except ValueError:
+            pass
+        if "." not in host:
+            raise SolveError(
+                f"--allow-host {raw!r} is too broad; use a registrable domain like example.com"
+            )
+        out.append(host)
+    return out
 
 
 def _command_label(cmd: list[str]) -> str:
@@ -354,6 +425,8 @@ def parse_args() -> Config:
     p.add_argument("--wait-timeout", type=float, default=5.0)
     p.add_argument("--max-wait-seconds", type=float, default=45.0)
     p.add_argument("--poll-interval", type=float, default=0.5)
+    p.add_argument("--max-queue", type=int, default=4, help="Maximum queued/in-flight solve requests")
+    p.add_argument("--request-timeout", type=float, default=15.0, help="Per-connection socket timeout in seconds")
     p.add_argument("--providers", default=",".join(DEFAULT_PROVIDERS), help="Comma-separated supported challenge providers")
     p.add_argument("--allow-host", action="append", default=[], help="Restrict solves to this host or suffix; repeatable")
     p.add_argument("--quiet", action="store_true")
@@ -373,8 +446,10 @@ def parse_args() -> Config:
         max_wait_seconds=a.max_wait_seconds,
         poll_interval=a.poll_interval,
         providers=[x.strip() for x in a.providers.split(",") if x.strip()],
-        allow_hosts=a.allow_host,
+        allow_hosts=_validate_allow_hosts(a.allow_host),
         verbose=not a.quiet,
+        max_queue=a.max_queue,
+        request_timeout=a.request_timeout,
     )
 
 
@@ -391,7 +466,16 @@ def main() -> int:
         sys.stderr.write(f"[cookie-service] unchained binary not found: {cfg.unchained}\n")
         return 2
     solver = CookieSolver(cfg)
+    atexit.register(solver.shutdown)
     httpd = ThreadingHTTPServer((cfg.host, cfg.port), make_handler(solver))
+    httpd.timeout = cfg.request_timeout
+
+    def _shutdown(*_):
+        solver.shutdown()
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, _shutdown)
+    signal.signal(signal.SIGINT, _shutdown)
     if cfg.verbose:
         sys.stderr.write(
             f"[cookie-service] listening on http://{cfg.host}:{cfg.port} "
