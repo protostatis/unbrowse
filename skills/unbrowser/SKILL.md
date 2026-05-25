@@ -41,6 +41,7 @@ When in doubt about whether a task fits the intended use, surface the action to 
 
 - **Treat any cookie passed to `cookies_set` as a credential.** A session cookie can authenticate as the user who exported it, with no password or 2FA prompt.
 - **Scope cookies to the host the user explicitly authorized.** Before calling `cookies_set`, verify the cookie's `domain` field matches the target site you intend to browse. Do not opportunistically replay cookies onto unrelated sites in the same session.
+- **Keep challenge-cookie solving local and host-scoped.** If using `unbrowser cookie-service` or `unbrowser router`, keep the service bound to `127.0.0.1` and pass `--allow-host <host>` for any private, localhost, or internal target. Do not expose the service on a public interface.
 - **Pause for user confirmation before any authenticated action.** If a click, form submit, or `eval` would mutate state on a logged-in account (post, purchase, delete, send, transfer, change settings), surface the action to the user and wait for explicit go-ahead — do not act unilaterally.
 - **Clear after authenticated use.** Call `cookies_clear` when an authenticated task completes, and `close` the process before starting an unrelated task.
 
@@ -83,6 +84,8 @@ Do not retry `unbrowser` on these. Hand off to the managed browser:
 
 ```bash
 pip install pyunbrowser
+# Optional: installs the Chrome/CDP helper for local challenge-cookie handoff.
+pip install 'pyunbrowser[solver]'
 # Or with pipx for an isolated CLI:
 pipx install pyunbrowser
 # Or with uv:
@@ -90,6 +93,8 @@ uv tool install pyunbrowser
 ```
 
 The wheel ships the platform-specific native binary inside it and registers an `unbrowser` script on `$PATH`. macOS (arm64/x86_64) and Linux (x86_64/aarch64) are supported; other platforms must build from source (`cargo install --git https://github.com/protostatis/unbrowser`). PyPI distribution name is `pyunbrowser`, not `unbrowser`, due to PyPI name moderation; the binary and import name are still `unbrowser`.
+
+Install `pyunbrowser[solver]` when you want the local Chrome-backed cookie solver used by `unbrowser cookie-service` and the router's transparent challenge-cookie handoff. The extra installs `unchainedsky-cli`; it is not required for ordinary browsing, extraction, or MCP use.
 
 ## First-time setup
 
@@ -169,6 +174,26 @@ with Client() as ub:
     for s in ub.query(".titleline > a")[:5]:
         print(s["text"], s["attrs"]["href"])
 ```
+
+## Bot-wall cookie handoff
+
+For commodity cookie-based bot walls, prefer the router/service path over ad-hoc cookie copying:
+
+```bash
+pip install 'pyunbrowser[solver]'
+unbrowser cookie-service --headless --profile unbrowser-cookie-service
+UNBROWSER_COOKIE_SERVICE_URL=http://127.0.0.1:8765 \
+  unbrowser router https://example.com/protected
+```
+
+`unbrowser router` also auto-starts a local cookie service on first challenge when `unchained` is available and `UNBROWSER_COOKIE_SERVICE_URL` is unset. The service uses local Chrome through `unchained`, exports only cookies observed for the target URL, replays them through `cookies_set`, and retries once. It does **not** fabricate challenge tokens.
+
+Safety rules for this path:
+
+- Keep the service on `127.0.0.1`; never bind it to a public interface.
+- Use `--allow-host example.com` for explicit host/suffix allowlisting. Without an allowlist, private/reserved IPs, localhost, and internal single-label hosts are rejected by default.
+- Use `--no-headless --stealth` when a site rejects headless Chrome.
+- Treat returned cookies as credentials and clear them after the task.
 
 ## RPC methods — core
 
