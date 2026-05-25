@@ -2,7 +2,11 @@
 
 **Web access for LLM agents. One static binary. No Chrome.**
 
+[![unbrowser MCP server](https://glama.ai/mcp/servers/protostatis/unbrowser/badges/score.svg)](https://glama.ai/mcp/servers/protostatis/unbrowser)
+
 `unbrowser` is the lightweight open-source browser tier from [Unchained](https://unchainedsky.com): cheap, stateful web access for agents when `curl`/WebFetch is too dumb and full Chrome is too heavy. When a page needs real Chrome, cookies, extensions, or human-in-the-loop auth, escalate to [`unchainedsky-cli`](https://github.com/protostatis/unchainedsky-cli) or [Unchained](https://unchainedsky.com).
+
+**Try it hosted:** Glama runs a hosted MCP release at [`glama.ai/mcp/servers/protostatis/unbrowser`](https://glama.ai/mcp/servers/protostatis/unbrowser). Click **Try in Browser** there to open a remote Inspector session, list tools, and call `navigate` without installing anything locally. For production agent workflows, install the local binary below so sessions and cookies stay on your machine.
 
 ### Install
 

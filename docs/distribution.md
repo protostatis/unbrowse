@@ -114,6 +114,21 @@ Glama build settings:
 
 Note: Glama wraps `cmdArguments` with `mcp-proxy --` in the generated Dockerfile, producing `CMD ["mcp-proxy","--","/opt/unbrowser/bin/unbrowser","--mcp"]`.
 
+Hosted smoke checklist for each Glama release:
+
+1. Start a fresh hosted instance from **Try in Browser**.
+2. Confirm MCP `initialize` reports `serverInfo.name = "unbrowser"` and the expected package version.
+3. Confirm `tools/list` returns the expected tool count.
+4. Call `navigate` on `https://news.ycombinator.com` and expect status `200`, title `Hacker News`, and `challenge: null`.
+5. Call `query` with `.titleline > a` and expect 30 story links.
+6. Call `text` or `text_clean` on the current page and confirm readable page text for SSR pages.
+7. Call `query` for `input[name=q]` and `form`, then `type` `wreq` into the input and `submit` the form.
+8. Expect the submit result to land on `https://hn.algolia.com/?q=wreq` with status `200`; `likely_js_filled: true` and sparse text there is expected because Algolia is an SPA shell.
+
+Latest hosted smoke result: Glama release `v0.1.1` initialized `unbrowser` `0.0.14`, exposed 32 tools, navigated Hacker News, returned 30 `.titleline > a` links, typed into HN search, and submitted to Algolia successfully.
+
+Latest score result: 92% profile completion, Server Coherence A, Tool Definition Quality A, with 32 of 32 tools scored.
+
 ### mcp.so
 
 URL: `https://mcp.so/submit`
