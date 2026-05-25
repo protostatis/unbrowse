@@ -128,7 +128,28 @@ For shell-friendly calls, use the convenience subcommand:
 unbrowser navigate https://news.ycombinator.com --json
 ```
 
-That prints one JSON result and exits. Use JSON-RPC only when you need a persistent session.
+That prints one JSON result and exits from any install path (PyPI wheel, Cargo, or release tarball). Use JSON-RPC only when you need a persistent session. Run `unbrowser --help` for the native CLI surface.
+
+### A/B runtime shims
+
+For corpus tests against JS-heavy pages, compare the default stable shims with the opt-in enhanced browser-environment shims:
+
+```bash
+unbrowser navigate https://example.com --exec-scripts --json
+unbrowser navigate https://example.com --exec-scripts --json --shims enhanced
+# or for JSON-RPC / MCP sessions:
+UNBROWSER_SHIMS=enhanced unbrowser
+```
+
+`enhanced` adds content-positive layout/media/scroll/IndexedDB guesses on top of the stable runtime. It is intentionally opt-in so A/B runs can measure whether more page state materializes without changing the baseline.
+
+Script evaluation is still bounded by `UNBROWSER_SCRIPT_EVAL_BUDGET_MS` (default `5000`); navigate results report `scripts.budget_exhausted` and `scripts.budget_skipped` when the budget stops further script execution. The outer RPC watchdog (`UNBROWSER_TIMEOUT_MS`, default `30000`) still wins if it is lower than the script budget.
+
+For a JSONL corpus sweep:
+
+```bash
+python3 scripts/shim_ab.py --url https://nextjs.org/docs --url https://www.npmjs.com/package/playwright
+```
 
 ## SPA tier — what works, what doesn't
 

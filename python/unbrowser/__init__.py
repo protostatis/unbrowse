@@ -38,6 +38,15 @@ class UnbrowserError(Exception):
     """Raised when the binary returns a JSON-RPC error or can't be spawned."""
 
 
+def _validate_shim_mode(shim_mode: str | None) -> str | None:
+    if shim_mode is None:
+        return None
+    normalized = shim_mode.lower()
+    if normalized not in {"stable", "enhanced", "experimental"}:
+        raise ValueError("shim_mode must be one of: stable, enhanced, experimental")
+    return normalized
+
+
 def find_binary() -> str:
     """Resolve the unbrowser binary path.
 
@@ -117,11 +126,15 @@ class Client:
     persists across calls until close().
     """
 
-    def __init__(self, binary: str | None = None):
+    def __init__(self, binary: str | None = None, shim_mode: str | None = None):
         binary_path = binary or find_binary()
+        shim_mode = _validate_shim_mode(shim_mode)
+        argv = [binary_path]
+        if shim_mode is not None:
+            argv.extend(["--shims", shim_mode])
         try:
             self._proc = subprocess.Popen(
-                [binary_path],
+                argv,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
@@ -401,7 +414,14 @@ class Client:
         self.close()
 
 
-def navigate(url: str) -> dict:
-    """One-shot: fetch a URL and return the navigate result. Closes immediately."""
-    with Client() as ub:
-        return ub.navigate(url)
+def navigate(url: str, exec_scripts: bool = False, shim_mode: str | None = None) -> dict:
+    """Fetch one URL and return the navigate result, then close immediately.
+
+    Args:
+        url: Absolute URL to navigate to.
+        exec_scripts: Run page scripts before returning. Defaults to False.
+        shim_mode: Optional runtime shim mode passed to Client: "stable",
+            "enhanced", or "experimental". None uses the binary default.
+    """
+    with Client(shim_mode=shim_mode) as ub:
+        return ub.navigate(url, exec_scripts=exec_scripts)

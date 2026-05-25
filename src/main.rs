@@ -2,7 +2,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::io::Write;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -28,6 +28,33 @@ const BLOCKMAP_JS: &str = include_str!("js/blockmap.js");
 const INTERACT_JS: &str = include_str!("js/interact.js");
 const EXTRACT_JS: &str = include_str!("js/extract.js");
 const PAGE_MODEL_JS: &str = include_str!("js/page_model.js");
+
+static EVENTS_ENABLED: AtomicBool = AtomicBool::new(true);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ShimMode {
+    Stable,
+    Enhanced,
+}
+
+impl ShimMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            ShimMode::Stable => "stable",
+            ShimMode::Enhanced => "enhanced",
+        }
+    }
+
+    fn parse(raw: &str) -> Result<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "" | "stable" | "default" => Ok(ShimMode::Stable),
+            "enhanced" | "experimental" => Ok(ShimMode::Enhanced),
+            other => Err(anyhow!(
+                "invalid shim mode '{other}'. Expected stable or enhanced"
+            )),
+        }
+    }
+}
 
 #[derive(Deserialize)]
 struct Request {
@@ -412,6 +439,9 @@ struct Session {
     /// via the prefit_applied event. None on parse failure (rare; would
     /// be a build-time bug). See src/prefit.rs (R1 from white paper §6).
     prefit: Option<prefit::PrefitBundle>,
+    /// JS runtime fidelity profile. `stable` preserves the release behavior;
+    /// `enhanced` enables opt-in layout/media/storage shims for A/B tests.
+    shim_mode: ShimMode,
 }
 
 struct DiscoverOptions<'a> {
@@ -490,7 +520,7 @@ fn validate_discover_url(raw: Option<&str>) -> Result<()> {
 }
 
 impl Session {
-    fn new(profile: &Profile, policy_block: bool) -> Result<Self> {
+    fn new(profile: &Profile, policy_block: bool, shim_mode: ShimMode) -> Result<Self> {
         let js_rt = rquickjs::Runtime::new().context("rquickjs Runtime::new")?;
         let js_ctx = rquickjs::Context::full(&js_rt).context("rquickjs Context::full")?;
         // Allocated up here so the __host_raw_body() host function below can
@@ -541,6 +571,9 @@ impl Session {
         js_ctx.with(|ctx| -> Result<()> {
             ctx.eval::<(), _>(DOM_JS)
                 .map_err(|e| anyhow!("eval dom.js: {e}"))?;
+            ctx.globals()
+                .set("__UNBROWSER_SHIM_MODE", shim_mode.as_str())
+                .map_err(|e| anyhow!("set __UNBROWSER_SHIM_MODE: {e}"))?;
             ctx.eval::<(), _>(SHIMS_JS)
                 .map_err(|e| anyhow!("eval shims.js: {e}"))?;
             ctx.eval::<(), _>(BLOCKMAP_JS)
@@ -703,7 +736,8 @@ impl Session {
         let bytecode_cache_disabled = bytecode_cache::is_disabled();
         let bytecode_cache_root = bytecode_cache::cache_dir();
         let shim_hash = bytecode_cache::sha256(&format!(
-            "{DOM_JS}\0{SHIMS_JS}\0{BLOCKMAP_JS}\0{INTERACT_JS}\0{EXTRACT_JS}\0{PAGE_MODEL_JS}"
+            "{}\0{DOM_JS}\0{SHIMS_JS}\0{BLOCKMAP_JS}\0{INTERACT_JS}\0{EXTRACT_JS}\0{PAGE_MODEL_JS}",
+            shim_mode.as_str()
         ));
         if !bytecode_cache_disabled {
             bytecode_cache::prune(&bytecode_cache_root, bytecode_cache::max_total_bytes());
@@ -728,6 +762,7 @@ impl Session {
             shim_hash,
             bytecode_cache_disabled,
             prefit,
+            shim_mode,
         })
     }
 
@@ -1443,14 +1478,22 @@ impl Session {
             // handler installed in Session::new fires periodically inside
             // QuickJS and aborts any running script (or settle pump callback,
             // or microtask) once the deadline passes. Tighten the outer
-            // dispatcher budget to 5s for the script-eval phase, then restore.
-            const SCRIPT_EVAL_BUDGET_MS: u64 = 5000;
-            let prev_deadline = self.set_eval_deadline_from_now(SCRIPT_EVAL_BUDGET_MS);
+            // dispatcher budget for the script-eval phase, then restore.
+            let script_eval_budget_ms = read_script_eval_budget_ms();
+            let prev_deadline = self.set_eval_deadline_from_now(script_eval_budget_ms);
 
+            let script_phase_start = std::time::Instant::now();
             let mut eval_errors: Vec<String> = Vec::new();
             let mut executed: usize = 0;
             let mut interrupted: usize = 0;
-            for (script_id, kind_str, url, source) in &sources {
+            let mut budget_exhausted = false;
+            let mut budget_skipped: usize = 0;
+            for (idx, (script_id, kind_str, url, source)) in sources.iter().enumerate() {
+                if script_phase_start.elapsed().as_millis() as u64 >= script_eval_budget_ms {
+                    budget_exhausted = true;
+                    budget_skipped = sources.len().saturating_sub(idx);
+                    break;
+                }
                 let eval_start = std::time::Instant::now();
                 // Set document.currentScript so webpack's automatic-publicPath
                 // detection works. Bluesky's main.js (and many webpack bundles
@@ -1472,7 +1515,9 @@ impl Session {
                 //      would not match the public source's hash.
                 //   2. Classic sources → eval_with_cache. Hit skips parse;
                 //      miss compiles + caches + evals.
-                let result = if looks_like_module(source) {
+                let result = if looks_like_module(source)
+                    || (self.shim_mode == ShimMode::Enhanced && looks_like_enhanced_module(source))
+                {
                     let src_lit = serde_json::to_string(source).unwrap_or_default();
                     let url_lit =
                         serde_json::to_string(url.as_deref().unwrap_or("")).unwrap_or_default();
@@ -1491,6 +1536,8 @@ impl Session {
                         let is_interrupt = msg.contains("interrupted");
                         if is_interrupt {
                             interrupted += 1;
+                            budget_exhausted = true;
+                            budget_skipped = sources.len().saturating_sub(idx + 1);
                         }
                         let truncated = if msg.len() > 200 {
                             format!("{}…", &msg[..200])
@@ -1513,6 +1560,9 @@ impl Session {
                                 "interrupted": is_interrupt,
                             }),
                         );
+                        if is_interrupt {
+                            break;
+                        }
                     }
                     Ok(()) => {
                         executed += 1;
@@ -1538,6 +1588,10 @@ impl Session {
             // script-phase one. (Settle pump callbacks are bounded too — they
             // run inside QuickJS evals which still consult the same atomic.)
             self.restore_eval_deadline(prev_deadline);
+            // If the last script hit the watchdog, clearing currentScript under
+            // the expired deadline may also have been interrupted. Clear it once
+            // more after restoring the normal RPC budget.
+            let _ = self.eval_void("__setCurrentScript(null)");
             // Fire DOMContentLoaded → settle → load → settle. Each settle
             // emits a `settle_exit` event with reason + counts so traces show
             // exactly why we bailed (idle / budget_exhausted / max_iters).
@@ -1588,8 +1642,11 @@ impl Session {
                         "async": async_count,
                         "skipped_blocklist": policy_blocked_count,
                         "fetch_failed": fetch_failed_count,
+                        "budget_ms": script_eval_budget_ms,
                         "executed": executed,
                         "interrupted": interrupted,
+                        "budget_exhausted": budget_exhausted,
+                        "budget_skipped": budget_skipped,
                     },
                     "settle": {
                         "after_dcl": after_dcl,
@@ -1604,8 +1661,11 @@ impl Session {
                 "async_count": async_count,
                 "policy_blocked": policy_blocked_count,
                 "fetch_failed": fetch_failed_count,
+                "budget_ms": script_eval_budget_ms,
                 "executed": executed,
                 "interrupted": interrupted,
+                "budget_exhausted": budget_exhausted,
+                "budget_skipped": budget_skipped,
                 "errors_count": eval_errors.len(),
                 "errors": eval_errors.into_iter().take(10).collect::<Vec<_>>(),
                 "fetch_errors_count": fetch_errors.len(),
@@ -1767,6 +1827,7 @@ impl Session {
                 "bytes": bytes,
                 "elapsed_ms": nav_start.elapsed().as_millis() as u64,
                 "exec_scripts": exec_scripts,
+                "shim_mode": self.shim_mode.as_str(),
                 "scripts_executed": scripts.as_ref().and_then(|s| s.get("executed")),
                 "scripts_interrupted": scripts.as_ref().and_then(|s| s.get("interrupted")),
                 "auto_extract_strategy": auto_extract.as_ref().and_then(|e| e.get("strategy")),
@@ -1867,6 +1928,7 @@ impl Session {
             "url": final_url,
             "bytes": bytes,
             "headers": Value::Object(headers),
+            "shim_mode": self.shim_mode.as_str(),
             "blockmap": blockmap,
             "challenge": challenge,
             "rate_limit": rate_limit,
@@ -4247,6 +4309,41 @@ fn looks_like_module(source: &str) -> bool {
     false
 }
 
+fn looks_like_enhanced_module(source: &str) -> bool {
+    let bytes = source.as_bytes();
+    let export_needles: [&[u8]; 8] = [
+        b"export{",
+        b"export*",
+        b"export default",
+        b"export const ",
+        b"export let ",
+        b"export var ",
+        b"export function ",
+        b"export class ",
+    ];
+    for i in 0..bytes.len() {
+        let matched = match bytes[i] {
+            b'i' => {
+                starts_with_at(bytes, i, b"import.meta") || starts_with_at(bytes, i, b"import(")
+            }
+            b'e' => export_needles
+                .iter()
+                .any(|needle| starts_with_at(bytes, i, needle)),
+            _ => false,
+        };
+        if matched {
+            return true;
+        }
+    }
+    false
+}
+
+fn starts_with_at(haystack: &[u8], idx: usize, needle: &[u8]) -> bool {
+    haystack
+        .get(idx..idx.saturating_add(needle.len()))
+        .is_some_and(|chunk| chunk == needle)
+}
+
 // Walk the parsed HTML tree and collect <script> elements in document order.
 // Skips:
 //   - <script type="application/json"> (data, not code — accessible via eval)
@@ -4451,6 +4548,9 @@ fn write_response(out: &mut impl Write, resp: &Response) -> Result<()> {
 }
 
 fn emit_event(name: &str, fields: Value) {
+    if !EVENTS_ENABLED.load(Ordering::Relaxed) {
+        return;
+    }
     let payload = json!({ "event": name, "data": fields });
     eprintln!("{}", serde_json::to_string(&payload).unwrap_or_default());
 }
@@ -5061,8 +5161,6 @@ fn derive_tool_likelihoods(
             .get("external_count")
             .and_then(|v| v.as_u64())
             .unwrap_or(0);
-    // Safe because the division only happens when `scripts_total > 0`.
-    debug_assert!(!exec_scripts || scripts_total > 0);
     let script_pathology = if exec_scripts && scripts_total > 0 {
         scripts_interrupted as f64 / scripts_total as f64
     } else {
@@ -5345,6 +5443,20 @@ fn validate_and_emit_outcome(
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
+    if args.iter().skip(1).any(|a| a == "--version" || a == "-V") {
+        println!("unbrowser {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+    if args.iter().skip(1).any(|a| is_help_flag(a)) {
+        if command_index(&args, "navigate").is_some() {
+            print_navigate_usage();
+        } else if command_index(&args, "policy-check").is_some() {
+            print_policy_check_usage();
+        } else {
+            print_usage();
+        }
+        return Ok(());
+    }
     if args.iter().any(|a| a == "--list-profiles") {
         for n in profile::Profile::list_builtin() {
             println!("{n}");
@@ -5383,6 +5495,9 @@ async fn main() -> Result<()> {
     if args.get(1).map(|s| s.as_str()) == Some("policy-check") {
         return policy_check_cmd(&args[2..]);
     }
+    if let Some(i) = command_index(&args, "navigate") {
+        return navigate_cmd(&args, i).await;
+    }
     let profile_name = parse_profile_arg(&args);
     let profile = Profile::load(&profile_name)?;
     if args.iter().any(|a| a == "--mcp") {
@@ -5390,6 +5505,70 @@ async fn main() -> Result<()> {
     } else {
         rpc_main(profile).await
     }
+}
+
+fn is_help_flag(arg: &str) -> bool {
+    arg == "-h" || arg == "--help"
+}
+
+fn command_index(args: &[String], command: &str) -> Option<usize> {
+    let mut i = 1;
+    while i < args.len() {
+        let arg = &args[i];
+        if arg == command {
+            return Some(i);
+        }
+        if arg == "--profile" || arg == "--shims" {
+            i += 2;
+        } else {
+            i += 1;
+        }
+    }
+    None
+}
+
+fn print_usage() {
+    println!(
+        r#"unbrowser {}
+
+Usage:
+  unbrowser [--profile <name>] [--policy=blocklist] [--shims stable|enhanced] [--mcp]
+  unbrowser navigate <url> [--exec-scripts] [--json] [--events] [--shims stable|enhanced]
+  unbrowser policy-check <url> [<url>...]
+  unbrowser --list-profiles
+  unbrowser --prefit-info
+  unbrowser --version
+
+Default with no subcommand starts JSON-RPC over stdin/stdout.
+Use --mcp for Model Context Protocol server mode.
+"#,
+        env!("CARGO_PKG_VERSION")
+    );
+}
+
+fn print_navigate_usage() {
+    println!(
+        r#"Usage:
+  unbrowser navigate <url> [--exec-scripts] [--json] [--events] [--shims stable|enhanced]
+
+Fetch one URL, print the navigate result as JSON, then exit.
+
+Options:
+  --exec-scripts   Run page scripts before returning
+  --json           Accepted for compatibility; JSON is always emitted
+  --events         Keep NDJSON observability events on stderr
+  --shims MODE     Runtime shim mode for A/B tests: stable (default) or enhanced
+"#
+    );
+}
+
+fn print_policy_check_usage() {
+    println!(
+        r#"Usage:
+  unbrowser policy-check <url> [<url>...]
+  unbrowser policy-check --info
+"#
+    );
 }
 
 // `unbrowser policy-check <url> [<url>...]`
@@ -5400,8 +5579,7 @@ async fn main() -> Result<()> {
 // no JS engine, no HTTP.
 fn policy_check_cmd(urls: &[String]) -> Result<()> {
     if urls.is_empty() {
-        eprintln!("usage: unbrowser policy-check <url> [<url>...]");
-        eprintln!("       unbrowser policy-check --info");
+        print_policy_check_usage();
         std::process::exit(2);
     }
     if urls.iter().any(|u| u == "--info") {
@@ -5427,6 +5605,80 @@ fn policy_check_cmd(urls: &[String]) -> Result<()> {
         }
     }
     Ok(())
+}
+
+struct NavigateCliArgs {
+    url: String,
+    exec_scripts: bool,
+    events: bool,
+}
+
+async fn navigate_cmd(args: &[String], command_i: usize) -> Result<()> {
+    let cli = parse_navigate_cli_args(args, command_i)?;
+    let profile_name = parse_profile_arg(args);
+    let profile = Profile::load(&profile_name)?;
+    let policy_block = parse_policy_arg(args);
+    let shim_mode = parse_shim_mode_arg(args)?;
+    let previous_events = EVENTS_ENABLED.swap(cli.events, Ordering::Relaxed);
+    let mut session = Session::new(&profile, policy_block, shim_mode)?;
+    let result = session.navigate(&cli.url, cli.exec_scripts).await;
+    EVENTS_ENABLED.store(previous_events, Ordering::Relaxed);
+    println!("{}", serde_json::to_string(&result?)?);
+    Ok(())
+}
+
+fn parse_navigate_cli_args(args: &[String], command_i: usize) -> Result<NavigateCliArgs> {
+    let mut url = None;
+    let mut exec_scripts = false;
+    let mut events = false;
+    let mut i = 1;
+    while i < args.len() {
+        if i == command_i {
+            i += 1;
+            continue;
+        }
+        let arg = &args[i];
+        if arg == "--profile" {
+            i += 2;
+            continue;
+        }
+        if arg == "--shims" {
+            i += 2;
+            continue;
+        }
+        if arg.starts_with("--profile=")
+            || arg.starts_with("--shims=")
+            || arg == "--policy=blocklist"
+            || arg == "--policy=on"
+            || arg == "--json"
+        {
+            i += 1;
+            continue;
+        }
+        if arg == "--exec-scripts" {
+            exec_scripts = true;
+            i += 1;
+            continue;
+        }
+        if arg == "--events" {
+            events = true;
+            i += 1;
+            continue;
+        }
+        if arg.starts_with('-') {
+            return Err(anyhow!("unknown navigate option: {arg}"));
+        }
+        if url.replace(arg.clone()).is_some() {
+            return Err(anyhow!("unexpected extra navigate argument: {arg}"));
+        }
+        i += 1;
+    }
+    let url = url.ok_or_else(|| anyhow!("missing URL. Run `unbrowser navigate --help`."))?;
+    Ok(NavigateCliArgs {
+        url,
+        exec_scripts,
+        events,
+    })
 }
 
 // `--profile <name>` or `--profile=<name>`. Falls back to UNBROWSER_PROFILE
@@ -5460,6 +5712,27 @@ fn parse_policy_arg(args: &[String]) -> bool {
         .unwrap_or(false)
 }
 
+// `--shims <mode>` or `--shims=<mode>`. Falls back to UNBROWSER_SHIMS.
+// Stable preserves the current release behavior; enhanced is opt-in for A/B
+// runs because it intentionally takes content-positive guesses about layout,
+// viewport, and storage APIs that a no-rendering browser can't know exactly.
+fn parse_shim_mode_arg(args: &[String]) -> Result<ShimMode> {
+    for (i, a) in args.iter().enumerate() {
+        if a == "--shims" {
+            let next = args
+                .get(i + 1)
+                .ok_or_else(|| anyhow!("--shims requires a value: stable or enhanced"))?;
+            return ShimMode::parse(next);
+        } else if let Some(rest) = a.strip_prefix("--shims=") {
+            return ShimMode::parse(rest);
+        }
+    }
+    match std::env::var("UNBROWSER_SHIMS") {
+        Ok(v) => ShimMode::parse(&v),
+        Err(_) => Ok(ShimMode::Stable),
+    }
+}
+
 // Per-RPC wall-clock budget for JS eval. Default 30s — fits the watchdog
 // design rationale (script phase tightens to 5s, settle gets the remainder).
 // Sites with legitimately slow SSR/hydration can set UNBROWSER_TIMEOUT_MS
@@ -5473,11 +5746,23 @@ fn read_dispatch_budget_ms() -> u64 {
         .unwrap_or(30_000)
 }
 
+// Per-navigation budget for static script evaluation before DOMContentLoaded.
+// Heavy bundles can still be useful when SSR content exists, so the default is
+// intentionally bounded and the result reports budget_exhausted/budget_skipped.
+fn read_script_eval_budget_ms() -> u64 {
+    std::env::var("UNBROWSER_SCRIPT_EVAL_BUDGET_MS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .map(|v| v.clamp(100, 600_000))
+        .unwrap_or(5_000)
+}
+
 async fn rpc_main(profile: Profile) -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let policy_block = parse_policy_arg(&args);
+    let shim_mode = parse_shim_mode_arg(&args)?;
     let profile_name = profile.name.clone();
-    let mut session = Session::new(&profile, policy_block)?;
+    let mut session = Session::new(&profile, policy_block, shim_mode)?;
     let stdin = tokio::io::stdin();
     let mut reader = BufReader::new(stdin).lines();
     let stdout = std::io::stdout();
@@ -5490,6 +5775,7 @@ async fn rpc_main(profile: Profile) -> Result<()> {
             "version": env!("CARGO_PKG_VERSION"),
             "dispatch_budget_ms": dispatch_budget_ms,
             "profile": profile_name,
+            "shim_mode": shim_mode.as_str(),
         }),
     );
 
@@ -6395,7 +6681,8 @@ async fn dispatch_tool(session: &mut Session, name: &str, args: &Value) -> Resul
 async fn mcp_main(profile: Profile) -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let policy_block = parse_policy_arg(&args);
-    let mut session = Session::new(&profile, policy_block)?;
+    let shim_mode = parse_shim_mode_arg(&args)?;
+    let mut session = Session::new(&profile, policy_block, shim_mode)?;
     let stdin = tokio::io::stdin();
     let mut reader = BufReader::new(stdin).lines();
     let stdout = std::io::stdout();
@@ -6437,7 +6724,8 @@ async fn mcp_main(profile: Profile) -> Result<()> {
                 "capabilities": { "tools": {} },
                 "serverInfo": {
                     "name": "unbrowser",
-                    "version": env!("CARGO_PKG_VERSION")
+                    "version": env!("CARGO_PKG_VERSION"),
+                    "shim_mode": shim_mode.as_str()
                 }
             })),
             "ping" => Ok(json!({})),
@@ -6486,6 +6774,135 @@ async fn mcp_main(profile: Profile) -> Result<()> {
         out.flush()?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod cli_tests {
+    use super::{ShimMode, command_index, parse_navigate_cli_args, parse_shim_mode_arg};
+
+    fn args(parts: &[&str]) -> Vec<String> {
+        std::iter::once("unbrowser".to_string())
+            .chain(parts.iter().map(|s| s.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn navigate_args_accept_global_flags_before_command() {
+        let args = args(&[
+            "--profile",
+            "chrome_134",
+            "--shims",
+            "enhanced",
+            "navigate",
+            "https://example.com",
+            "--exec-scripts",
+            "--events",
+            "--json",
+        ]);
+        let command_i = command_index(&args, "navigate").expect("navigate command");
+        let parsed = parse_navigate_cli_args(&args, command_i).expect("parsed navigate args");
+        assert_eq!(parsed.url, "https://example.com");
+        assert!(parsed.exec_scripts);
+        assert!(parsed.events);
+        assert_eq!(parse_shim_mode_arg(&args).unwrap(), ShimMode::Enhanced);
+    }
+
+    #[test]
+    fn navigate_args_reject_extra_positional() {
+        let args = args(&["navigate", "https://example.com", "https://example.org"]);
+        let command_i = command_index(&args, "navigate").expect("navigate command");
+        assert!(parse_navigate_cli_args(&args, command_i).is_err());
+    }
+}
+
+#[cfg(test)]
+mod shim_mode_tests {
+    use super::{Profile, Session, ShimMode, profile};
+
+    #[test]
+    fn enhanced_shims_enable_layout_and_media_guesses() {
+        let profile = Profile::load(profile::DEFAULT_PROFILE).expect("default profile");
+        let stable = Session::new(&profile, false, ShimMode::Stable).expect("stable session");
+        assert_eq!(
+            stable
+                .eval("document.createElement('div').getBoundingClientRect().width")
+                .expect("stable eval")
+                .as_u64(),
+            Some(0)
+        );
+
+        let enhanced = Session::new(&profile, false, ShimMode::Enhanced).expect("enhanced session");
+        let v = enhanced
+            .eval(
+                r#"(() => {
+                  const el = document.createElement('div');
+                  el.textContent = 'content that should occupy a synthetic box';
+                  const first = document.createElement('div');
+                  const second = document.createElement('div');
+                  document.body.appendChild(first);
+                  document.body.appendChild(second);
+                  return {
+                    mode: __unbrowser_shims.mode,
+                    width: el.getBoundingClientRect().width,
+                    firstTop: first.getBoundingClientRect().top,
+                    secondTop: second.getBoundingClientRect().top,
+                    media: matchMedia('(min-width: 1000px)').matches,
+                    unsupportedMedia: matchMedia('(prefers-reduced-transparency: reduce)').matches,
+                    hidden: document.hidden,
+                    idbOpen: !!indexedDB.open('shim-test'),
+                  };
+                })()"#,
+            )
+            .expect("enhanced eval");
+        assert_eq!(v.get("mode").and_then(|v| v.as_str()), Some("enhanced"));
+        assert!(v.get("width").and_then(|v| v.as_u64()).unwrap_or(0) > 0);
+        assert!(
+            v.get("secondTop").and_then(|v| v.as_i64()).unwrap_or(0)
+                > v.get("firstTop").and_then(|v| v.as_i64()).unwrap_or(0)
+        );
+        assert_eq!(v.get("media").and_then(|v| v.as_bool()), Some(true));
+        assert_eq!(
+            v.get("unsupportedMedia").and_then(|v| v.as_bool()),
+            Some(false)
+        );
+        assert_eq!(v.get("hidden").and_then(|v| v.as_bool()), Some(false));
+        assert_eq!(v.get("idbOpen").and_then(|v| v.as_bool()), Some(true));
+
+        let custom = enhanced
+            .eval(
+                r#"(() => {
+                  class XProbe extends HTMLElement {
+                    connectedCallback() { this.textContent = 'connected'; }
+                  }
+                  customElements.define('x-probe', XProbe);
+                  const el = document.createElement('x-probe');
+                  document.body.appendChild(el);
+                  const t = document.createElement('template');
+                  t.innerHTML = '<p id="inside">templated</p>';
+                  const frag = document.adoptNode(t.content);
+                  return {
+                    defined: !!customElements.get('x-probe'),
+                    connected: el.textContent,
+                    templateText: frag.querySelector('#inside').textContent,
+                    moduleLike: __looksLikeModuleSource('const x = import.meta.url; export { x };'),
+                  };
+                })()"#,
+            )
+            .expect("custom elements eval");
+        assert_eq!(custom.get("defined").and_then(|v| v.as_bool()), Some(true));
+        assert_eq!(
+            custom.get("connected").and_then(|v| v.as_str()),
+            Some("connected")
+        );
+        assert_eq!(
+            custom.get("templateText").and_then(|v| v.as_str()),
+            Some("templated")
+        );
+        assert_eq!(
+            custom.get("moduleLike").and_then(|v| v.as_bool()),
+            Some(true)
+        );
+    }
 }
 
 #[cfg(test)]
