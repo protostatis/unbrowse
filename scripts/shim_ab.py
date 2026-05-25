@@ -44,8 +44,8 @@ def rpc(binary: str, mode: str, requests: list[dict[str, Any]], timeout: float) 
     finally:
         try:
             proc.stdin.close()
-        except OSError:
-            pass
+        except OSError as exc:
+            print(f"shim_ab: failed to close stdin for {mode}: {exc}", file=sys.stderr)
         try:
             proc.wait(timeout=2)
         except subprocess.TimeoutExpired:

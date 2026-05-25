@@ -1376,19 +1376,22 @@
       var x = 0;
       var y = 0;
       var depth = 0;
+      var hops = 0;
       var cur = el;
-      while (cur && cur.parentNode && depth < 20) {
+      while (cur && cur.parentNode && depth < 100 && hops < 5000) {
         var idx = 0;
         var sib = cur.previousSibling;
-        while (sib) {
+        while (sib && hops < 5000) {
           if (sib.nodeType === 1) idx++;
           if (idx > 200) break;
           sib = sib.previousSibling;
+          hops++;
         }
         y += idx * 28;
         x += depth * 4;
         cur = cur.parentNode;
         depth++;
+        hops++;
       }
       return {
         x: x - (Number(globalThis.scrollX) || 0),
@@ -1511,11 +1514,17 @@
       try { document.dispatchEvent(new Event('scroll')); } catch (e) {}
     }
     globalThis.scrollTo = function(x, y) {
-      if (typeof x === 'object') setScroll(x.left || x.x || 0, x.top || x.y || 0);
+      if (x && typeof x === 'object') {
+        if (x.left == null && x.x == null && x.top == null && x.y == null) return;
+        setScroll(x.left != null ? x.left : x.x || 0, x.top != null ? x.top : x.y || 0);
+      }
       else setScroll(x, y);
     };
     globalThis.scrollBy = function(x, y) {
-      if (typeof x === 'object') setScroll((globalThis.scrollX || 0) + (x.left || x.x || 0), (globalThis.scrollY || 0) + (x.top || x.y || 0));
+      if (x && typeof x === 'object') {
+        if (x.left == null && x.x == null && x.top == null && x.y == null) return;
+        setScroll((globalThis.scrollX || 0) + (x.left != null ? x.left : x.x || 0), (globalThis.scrollY || 0) + (x.top != null ? x.top : x.y || 0));
+      }
       else setScroll((globalThis.scrollX || 0) + (Number(x) || 0), (globalThis.scrollY || 0) + (Number(y) || 0));
     };
     globalThis.scroll = globalThis.scrollTo;

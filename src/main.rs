@@ -4322,22 +4322,17 @@ fn looks_like_enhanced_module(source: &str) -> bool {
         b"export class ",
     ];
     for i in 0..bytes.len() {
-        match bytes[i] {
+        let matched = match bytes[i] {
             b'i' => {
-                if starts_with_at(bytes, i, b"import.meta") || starts_with_at(bytes, i, b"import(")
-                {
-                    return true;
-                }
+                starts_with_at(bytes, i, b"import.meta") || starts_with_at(bytes, i, b"import(")
             }
-            b'e' => {
-                if export_needles
-                    .iter()
-                    .any(|needle| starts_with_at(bytes, i, needle))
-                {
-                    return true;
-                }
-            }
-            _ => {}
+            b'e' => export_needles
+                .iter()
+                .any(|needle| starts_with_at(bytes, i, needle)),
+            _ => false,
+        };
+        if matched {
+            return true;
         }
     }
     false

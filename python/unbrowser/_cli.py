@@ -32,6 +32,8 @@ Examples:
   unbrowser navigate https://news.ycombinator.com --json
   unbrowser policy-check https://www.bbc.com/news
   printf '{\"id\":1,\"method\":\"navigate\",\"params\":{\"url\":\"https://news.ycombinator.com\"}}\n' | unbrowser
+
+`navigate` delegates to the native binary; output is always the binary's JSON.
 """
     )
 
