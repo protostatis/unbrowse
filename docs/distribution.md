@@ -93,7 +93,7 @@ Listing title: `unbrowser by Unchained`
 
 Description: use the short description above.
 
-Status: public listing claimed and author-verified. Glama release `v0.1.0` published from commit `eff1674a7bd7ee466aedc1a50eda038f8eb2c908`; build test `019e60ce-e898-72da-a185-c208894d6061` succeeded and initialized `unbrowser` `0.0.13` through `mcp-proxy`.
+Status: public listing claimed and author-verified. Latest Glama release `v0.1.1` published from commit `eff1674a7bd7ee466aedc1a50eda038f8eb2c908`; build test `019e60f6-34e2-7c51-a26f-eb5d63d26ac4` succeeded and initialized `unbrowser` `0.0.14` through `mcp-proxy`.
 
 Glama build settings:
 
@@ -103,7 +103,7 @@ Glama build settings:
   "pythonVersion": "3.14",
   "nodeVersion": "26",
   "buildSteps": [
-    "uv venv /opt/unbrowser --python 3.14 && VIRTUAL_ENV=/opt/unbrowser uv pip install pyunbrowser==0.0.13"
+    "uv venv /opt/unbrowser --python 3.14 && VIRTUAL_ENV=/opt/unbrowser uv pip install pyunbrowser==0.0.14"
   ],
   "cmdArguments": [
     "/opt/unbrowser/bin/unbrowser",
