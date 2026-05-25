@@ -227,6 +227,7 @@ def main() -> int:
             service.communicate(timeout=5)
         except subprocess.TimeoutExpired:
             service.kill()
+            service.wait(timeout=5)
         subprocess.run(["unchained", "--port", str(cdp_port), "kill"], capture_output=True, timeout=10)
         httpd.shutdown()
         httpd.server_close()
