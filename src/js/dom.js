@@ -569,7 +569,8 @@
   // --- Element ---
   function Element(tagName) {
     Node.call(this, ELEMENT_NODE);
-    tagName = tagName || 'div';
+    if (tagName == null) tagName = 'div';
+    if (String(tagName) === '') throw new TypeError('Element tagName must not be empty');
     this.tagName = String(tagName).toUpperCase();
     this.nodeName = this.tagName;
     this._attributes = {};

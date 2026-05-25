@@ -1369,6 +1369,33 @@
       return { width: Math.min(ENH_VIEWPORT_W, 720), height: 24 };
     }
 
+    function syntheticElementOffset(el) {
+      // No renderer means no real layout tree. Use a cheap DOM-order heuristic
+      // so viewport/intersection probes see distinct, scroll-sensitive boxes
+      // instead of every element sitting at 0,0.
+      var x = 0;
+      var y = 0;
+      var depth = 0;
+      var cur = el;
+      while (cur && cur.parentNode && depth < 20) {
+        var idx = 0;
+        var sib = cur.previousSibling;
+        while (sib) {
+          if (sib.nodeType === 1) idx++;
+          if (idx > 200) break;
+          sib = sib.previousSibling;
+        }
+        y += idx * 28;
+        x += depth * 4;
+        cur = cur.parentNode;
+        depth++;
+      }
+      return {
+        x: x - (Number(globalThis.scrollX) || 0),
+        y: y - (Number(globalThis.scrollY) || 0),
+      };
+    }
+
     function syntheticElementRect(el) {
       if (hiddenByStyle(el)) return { x: 0, y: 0, width: 0, height: 0, top: 0, left: 0, right: 0, bottom: 0 };
       var def = tagDefaultRect(el);
@@ -1384,15 +1411,16 @@
       }
       width = Math.max(1, Math.min(ENH_VIEWPORT_W, Math.round(width)));
       height = Math.max(1, Math.round(height));
+      var pos = syntheticElementOffset(el);
       return {
-        x: 0,
-        y: 0,
+        x: pos.x,
+        y: pos.y,
         width: width,
         height: height,
-        top: 0,
-        left: 0,
-        right: width,
-        bottom: height,
+        top: pos.y,
+        left: pos.x,
+        right: pos.x + width,
+        bottom: pos.y + height,
         toJSON: function() { return this; },
       };
     }
@@ -1429,24 +1457,31 @@
       query = String(query || '').toLowerCase();
       if (!query || query === 'all') return true;
       if (query.indexOf('not all') !== -1) return false;
-      var m;
-      m = query.match(/min-width\s*:\s*(\d+)px/);
-      if (m && ENH_VIEWPORT_W < Number(m[1])) return false;
-      m = query.match(/max-width\s*:\s*(\d+)px/);
-      if (m && ENH_VIEWPORT_W > Number(m[1])) return false;
-      m = query.match(/min-height\s*:\s*(\d+)px/);
-      if (m && ENH_VIEWPORT_H < Number(m[1])) return false;
-      m = query.match(/max-height\s*:\s*(\d+)px/);
-      if (m && ENH_VIEWPORT_H > Number(m[1])) return false;
-      if (query.indexOf('orientation: portrait') !== -1 && ENH_VIEWPORT_W >= ENH_VIEWPORT_H) return false;
-      if (query.indexOf('orientation: landscape') !== -1 && ENH_VIEWPORT_W < ENH_VIEWPORT_H) return false;
-      if (query.indexOf('prefers-color-scheme: dark') !== -1) return false;
-      if (query.indexOf('prefers-color-scheme: light') !== -1) return true;
-      if (query.indexOf('prefers-reduced-motion: reduce') !== -1) return false;
-      if (query.indexOf('prefers-reduced-motion: no-preference') !== -1) return true;
-      if (query.indexOf('hover: hover') !== -1 || query.indexOf('any-hover: hover') !== -1) return true;
-      if (query.indexOf('pointer: fine') !== -1 || query.indexOf('any-pointer: fine') !== -1) return true;
-      if (query.indexOf('display-mode: browser') !== -1) return true;
+      var clauses = query.match(/\([^)]+\)/g) || [];
+      for (var i = 0; i < clauses.length; i++) {
+        var clause = clauses[i].slice(1, -1).trim();
+        var m;
+        m = clause.match(/^min-width\s*:\s*(\d+)px$/);
+        if (m) { if (ENH_VIEWPORT_W < Number(m[1])) return false; continue; }
+        m = clause.match(/^max-width\s*:\s*(\d+)px$/);
+        if (m) { if (ENH_VIEWPORT_W > Number(m[1])) return false; continue; }
+        m = clause.match(/^min-height\s*:\s*(\d+)px$/);
+        if (m) { if (ENH_VIEWPORT_H < Number(m[1])) return false; continue; }
+        m = clause.match(/^max-height\s*:\s*(\d+)px$/);
+        if (m) { if (ENH_VIEWPORT_H > Number(m[1])) return false; continue; }
+        if (clause === 'orientation: portrait') { if (ENH_VIEWPORT_W >= ENH_VIEWPORT_H) return false; continue; }
+        if (clause === 'orientation: landscape') { if (ENH_VIEWPORT_W < ENH_VIEWPORT_H) return false; continue; }
+        if (clause === 'prefers-color-scheme: dark') return false;
+        if (clause === 'prefers-color-scheme: light') continue;
+        if (clause === 'prefers-reduced-motion: reduce') return false;
+        if (clause === 'prefers-reduced-motion: no-preference') continue;
+        if (clause === 'hover: hover' || clause === 'any-hover: hover') continue;
+        if (clause === 'hover: none' || clause === 'any-hover: none') return false;
+        if (clause === 'pointer: fine' || clause === 'any-pointer: fine') continue;
+        if (clause === 'pointer: coarse' || clause === 'any-pointer: coarse') return false;
+        if (clause === 'display-mode: browser') continue;
+        return false;
+      }
       return true;
     }
 
@@ -1534,13 +1569,18 @@
         return requestSuccess(req, result || null);
       }
       function makeStore(db, name) {
-        if (!db._stores[name]) db._stores[name] = { data: {}, indexes: {} };
+        if (!db._stores[name]) db._stores[name] = { data: {}, indexes: {}, nextKey: 1 };
         var backing = db._stores[name];
+        function storeKey(value, key) {
+          if (key !== undefined && key !== null) return key;
+          if (value && value.id !== undefined && value.id !== null) return value.id;
+          return backing.nextKey++;
+        }
         return {
           name: name,
           get: function(key) { return makeRequest(backing.data[String(key)] || undefined); },
           getAll: function() { var out = []; for (var k in backing.data) out.push(backing.data[k]); return makeRequest(out); },
-          put: function(value, key) { backing.data[String(key || (value && value.id) || Date.now())] = value; return makeRequest(key); },
+          put: function(value, key) { var k = storeKey(value, key); backing.data[String(k)] = value; return makeRequest(k); },
           add: function(value, key) { return this.put(value, key); },
           delete: function(key) { delete backing.data[String(key)]; return makeRequest(undefined); },
           clear: function() { backing.data = {}; return makeRequest(undefined); },

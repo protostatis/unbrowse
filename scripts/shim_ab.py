@@ -99,6 +99,7 @@ def summarize(url: str, mode: str, responses: list[dict[str, Any]], elapsed_ms: 
         "form_count": len(interactives.get("forms") or []),
         "text_chars": len(text or ""),
         "scripts_executed": scripts.get("executed"),
+        "scripts_budget_ms": scripts.get("budget_ms"),
         "scripts_errors_count": script_errors_count,
         "scripts_errors": script_errors,
         "scripts_interrupted": scripts.get("interrupted"),
@@ -149,11 +150,17 @@ def main() -> int:
     if not urls:
         parser.error("provide --url or --file")
 
-    for url in urls:
+    run_id = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    run_index = 0
+    for url_index, url in enumerate(urls):
         for mode in ("stable", "enhanced"):
             row = run_one(args.binary, url, mode, not args.no_exec_scripts, args.timeout)
+            row["run_id"] = run_id
+            row["run_index"] = run_index
+            row["url_index"] = url_index
             print(json.dumps(row, sort_keys=True))
             sys.stdout.flush()
+            run_index += 1
     return 0
 
 

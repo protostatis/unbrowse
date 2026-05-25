@@ -143,6 +143,8 @@ UNBROWSER_SHIMS=enhanced unbrowser
 
 `enhanced` adds content-positive layout/media/scroll/IndexedDB guesses on top of the stable runtime. It is intentionally opt-in so A/B runs can measure whether more page state materializes without changing the baseline.
 
+Script evaluation is still bounded by `UNBROWSER_SCRIPT_EVAL_BUDGET_MS` (default `5000`); navigate results report `scripts.budget_exhausted` and `scripts.budget_skipped` when the budget stops further script execution.
+
 For a JSONL corpus sweep:
 
 ```bash

@@ -1478,9 +1478,9 @@ impl Session {
             // handler installed in Session::new fires periodically inside
             // QuickJS and aborts any running script (or settle pump callback,
             // or microtask) once the deadline passes. Tighten the outer
-            // dispatcher budget to 5s for the script-eval phase, then restore.
-            const SCRIPT_EVAL_BUDGET_MS: u64 = 5000;
-            let prev_deadline = self.set_eval_deadline_from_now(SCRIPT_EVAL_BUDGET_MS);
+            // dispatcher budget for the script-eval phase, then restore.
+            let script_eval_budget_ms = read_script_eval_budget_ms();
+            let prev_deadline = self.set_eval_deadline_from_now(script_eval_budget_ms);
 
             let script_phase_start = std::time::Instant::now();
             let mut eval_errors: Vec<String> = Vec::new();
@@ -1489,7 +1489,7 @@ impl Session {
             let mut budget_exhausted = false;
             let mut budget_skipped: usize = 0;
             for (idx, (script_id, kind_str, url, source)) in sources.iter().enumerate() {
-                if script_phase_start.elapsed().as_millis() as u64 >= SCRIPT_EVAL_BUDGET_MS {
+                if script_phase_start.elapsed().as_millis() as u64 >= script_eval_budget_ms {
                     budget_exhausted = true;
                     budget_skipped = sources.len().saturating_sub(idx);
                     break;
@@ -1642,6 +1642,7 @@ impl Session {
                         "async": async_count,
                         "skipped_blocklist": policy_blocked_count,
                         "fetch_failed": fetch_failed_count,
+                        "budget_ms": script_eval_budget_ms,
                         "executed": executed,
                         "interrupted": interrupted,
                         "budget_exhausted": budget_exhausted,
@@ -1660,6 +1661,7 @@ impl Session {
                 "async_count": async_count,
                 "policy_blocked": policy_blocked_count,
                 "fetch_failed": fetch_failed_count,
+                "budget_ms": script_eval_budget_ms,
                 "executed": executed,
                 "interrupted": interrupted,
                 "budget_exhausted": budget_exhausted,
@@ -4308,34 +4310,43 @@ fn looks_like_module(source: &str) -> bool {
 }
 
 fn looks_like_enhanced_module(source: &str) -> bool {
-    if source.contains("import.meta")
-        || source.contains("import(")
-        || source.contains("export{")
-        || source.contains("export*")
-        || source.contains("export default")
-        || source.contains("export const ")
-        || source.contains("export let ")
-        || source.contains("export var ")
-        || source.contains("export function ")
-        || source.contains("export class ")
-    {
-        return true;
-    }
-    for line in source.lines().take(2000) {
-        let trimmed = line.trim_start();
-        if trimmed.starts_with("export{")
-            || trimmed.starts_with("export*")
-            || trimmed.starts_with("export default")
-            || trimmed.starts_with("export const ")
-            || trimmed.starts_with("export let ")
-            || trimmed.starts_with("export var ")
-            || trimmed.starts_with("export function ")
-            || trimmed.starts_with("export class ")
-        {
-            return true;
+    let bytes = source.as_bytes();
+    let export_needles: [&[u8]; 8] = [
+        b"export{",
+        b"export*",
+        b"export default",
+        b"export const ",
+        b"export let ",
+        b"export var ",
+        b"export function ",
+        b"export class ",
+    ];
+    for i in 0..bytes.len() {
+        match bytes[i] {
+            b'i' => {
+                if starts_with_at(bytes, i, b"import.meta") || starts_with_at(bytes, i, b"import(")
+                {
+                    return true;
+                }
+            }
+            b'e' => {
+                if export_needles
+                    .iter()
+                    .any(|needle| starts_with_at(bytes, i, needle))
+                {
+                    return true;
+                }
+            }
+            _ => {}
         }
     }
     false
+}
+
+fn starts_with_at(haystack: &[u8], idx: usize, needle: &[u8]) -> bool {
+    haystack
+        .get(idx..idx.saturating_add(needle.len()))
+        .is_some_and(|chunk| chunk == needle)
 }
 
 // Walk the parsed HTML tree and collect <script> elements in document order.
@@ -5740,6 +5751,17 @@ fn read_dispatch_budget_ms() -> u64 {
         .unwrap_or(30_000)
 }
 
+// Per-navigation budget for static script evaluation before DOMContentLoaded.
+// Heavy bundles can still be useful when SSR content exists, so the default is
+// intentionally bounded and the result reports budget_exhausted/budget_skipped.
+fn read_script_eval_budget_ms() -> u64 {
+    std::env::var("UNBROWSER_SCRIPT_EVAL_BUDGET_MS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .map(|v| v.clamp(100, 600_000))
+        .unwrap_or(5_000)
+}
+
 async fn rpc_main(profile: Profile) -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let policy_block = parse_policy_arg(&args);
@@ -6820,10 +6842,17 @@ mod shim_mode_tests {
                 r#"(() => {
                   const el = document.createElement('div');
                   el.textContent = 'content that should occupy a synthetic box';
+                  const first = document.createElement('div');
+                  const second = document.createElement('div');
+                  document.body.appendChild(first);
+                  document.body.appendChild(second);
                   return {
                     mode: __unbrowser_shims.mode,
                     width: el.getBoundingClientRect().width,
+                    firstTop: first.getBoundingClientRect().top,
+                    secondTop: second.getBoundingClientRect().top,
                     media: matchMedia('(min-width: 1000px)').matches,
+                    unsupportedMedia: matchMedia('(prefers-reduced-transparency: reduce)').matches,
                     hidden: document.hidden,
                     idbOpen: !!indexedDB.open('shim-test'),
                   };
@@ -6832,7 +6861,15 @@ mod shim_mode_tests {
             .expect("enhanced eval");
         assert_eq!(v.get("mode").and_then(|v| v.as_str()), Some("enhanced"));
         assert!(v.get("width").and_then(|v| v.as_u64()).unwrap_or(0) > 0);
+        assert!(
+            v.get("secondTop").and_then(|v| v.as_i64()).unwrap_or(0)
+                > v.get("firstTop").and_then(|v| v.as_i64()).unwrap_or(0)
+        );
         assert_eq!(v.get("media").and_then(|v| v.as_bool()), Some(true));
+        assert_eq!(
+            v.get("unsupportedMedia").and_then(|v| v.as_bool()),
+            Some(false)
+        );
         assert_eq!(v.get("hidden").and_then(|v| v.as_bool()), Some(false));
         assert_eq!(v.get("idbOpen").and_then(|v| v.as_bool()), Some(true));
 

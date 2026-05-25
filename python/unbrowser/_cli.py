@@ -12,6 +12,7 @@ useful `--help` surface. Invocations are passed through to the binary.
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 
 from . import find_binary
@@ -41,7 +42,8 @@ def _is_help_flag(arg: str) -> bool:
 
 def _navigate(args: list[str]) -> None:
     binary = find_binary()
-    os.execv(binary, ["unbrowser", "navigate", *args])
+    completed = subprocess.run([binary, "navigate", *args], check=False)
+    raise SystemExit(completed.returncode)
 
 
 def main() -> None:
