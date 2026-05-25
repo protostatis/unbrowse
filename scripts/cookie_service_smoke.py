@@ -21,7 +21,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "scripts"))
 
-from router import Router, RouterConfig  # noqa: E402
+from router import Router, RouterConfig, RouterError, _is_loopback_service_url  # noqa: E402
 from cookie_service import SolveError, _is_private_or_reserved_host, _validate_allow_hosts  # noqa: E402
 
 
@@ -136,6 +136,14 @@ def check(label: str, condition: bool) -> bool:
 
 def main() -> int:
     ok = True
+    ok &= check("loopback cookie service URLs are allowed", all(_is_loopback_service_url(u) for u in ("http://localhost:8765", "http://127.0.0.1:8765", "http://[::1]:8765")))
+    ok &= check("remote cookie service URLs require opt-in", not any(_is_loopback_service_url(u) for u in ("https://example.com", "http://192.168.1.10:8765")))
+    try:
+        Router(RouterConfig(binary="/definitely/missing/unbrowser", cookie_service_url="https://example.com"))
+        remote_service_rejected = False
+    except RouterError:
+        remote_service_rejected = True
+    ok &= check("router rejects remote cookie service by default", remote_service_rejected)
     ok &= check("localhost is private by default", _is_private_or_reserved_host("localhost"))
     ok &= check("loopback is private by default", _is_private_or_reserved_host("127.0.0.1"))
     ok &= check("loopback allow-host is accepted", _validate_allow_hosts(["127.0.0.1"]) == ["127.0.0.1"])

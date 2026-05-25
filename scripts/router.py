@@ -34,6 +34,7 @@ doesn't care how you get the cookies.
 from __future__ import annotations
 
 import json
+import ipaddress
 import os
 import shutil
 import socket
@@ -61,6 +62,7 @@ class RouterConfig:
     auto_start_cookie_service: bool = True
     cookie_service_unchained: str = "unchained"
     cookie_service_headless: bool = True
+    allow_remote_cookie_service: bool = False
     max_escalations: int = 1     # avoid infinite loops on permanently-blocked sites
     verbose: bool = True
 
@@ -79,6 +81,16 @@ class Router:
             or os.environ.get("UNBROWSER_COOKIE_SERVICE_URL")
             or ""
         ).rstrip("/")
+        allow_remote_service = config.allow_remote_cookie_service or _env_bool(
+            "UNBROWSER_ALLOW_REMOTE_COOKIE_SERVICE", False
+        )
+        if self._cookie_service_url and not allow_remote_service and not _is_loopback_service_url(self._cookie_service_url):
+            raise RouterError(
+                "refusing non-loopback cookie service URL; set "
+                "RouterConfig.allow_remote_cookie_service=True or "
+                "UNBROWSER_ALLOW_REMOTE_COOKIE_SERVICE=1 to acknowledge that "
+                "target URLs and challenge metadata will be sent to that service"
+            )
         self._cookie_service_caps: dict | None = None
         self._cookie_service_proc: subprocess.Popen | None = None
         self._proc = subprocess.Popen(
@@ -482,6 +494,23 @@ def _cookie_service_script() -> Path | None:
     return None
 
 
+def _is_loopback_service_url(url: str) -> bool:
+    host = (urlparse(url).hostname or "").strip().rstrip(".").lower()
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() not in ("0", "false", "no", "off")
+
+
 def _free_port() -> int:
     s = socket.socket()
     try:
@@ -552,6 +581,8 @@ def _demo() -> None:
                         help="Path to a cached cookies JSON file (CDP or ub format)")
     parser.add_argument("--cookie-service", default=None,
                         help="Local cookie service URL (or UNBROWSER_COOKIE_SERVICE_URL)")
+    parser.add_argument("--allow-remote-cookie-service", action="store_true",
+                        help="Allow sending target URLs and challenge metadata to a non-loopback cookie service")
     parser.add_argument("--no-auto-cookie-service", action="store_true",
                         help="Do not auto-start the local cookie service when unchained is available")
     parser.add_argument("--no-headless-cookie-service", action="store_true",
@@ -569,6 +600,7 @@ def _demo() -> None:
         cwd=cwd,
         chrome_solver=solver,
         cookie_service_url=args.cookie_service,
+        allow_remote_cookie_service=args.allow_remote_cookie_service,
         auto_start_cookie_service=not args.no_auto_cookie_service,
         cookie_service_headless=not args.no_headless_cookie_service,
     )

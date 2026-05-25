@@ -191,6 +191,7 @@ UNBROWSER_COOKIE_SERVICE_URL=http://127.0.0.1:8765 \
 Safety rules for this path:
 
 - Keep the service on `127.0.0.1`; never bind it to a public interface.
+- Keep `UNBROWSER_COOKIE_SERVICE_URL` loopback-only unless the user explicitly trusts a remote solver; remote services receive target URLs and challenge metadata and require `--allow-remote-cookie-service`.
 - Use `--allow-host example.com` for explicit host/suffix allowlisting. Without an allowlist, private/reserved IPs, localhost, and internal single-label hosts are rejected by default.
 - Use `--no-headless --stealth` when a site rejects headless Chrome.
 - Treat returned cookies as credentials and clear them after the task.
