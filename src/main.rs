@@ -1,10 +1,15 @@
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
-use std::io::Write;
+use std::io::{BufRead, BufReader as StdBufReader, Write};
+use std::os::unix::fs::PermissionsExt;
+use std::os::unix::net::{UnixListener, UnixStream};
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, RwLock};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, anyhow};
 use html5ever::tendril::TendrilSink;
@@ -78,6 +83,30 @@ struct Response {
 struct RpcError {
     code: i32,
     message: String,
+}
+
+fn eval_code_param(params: &Value) -> std::result::Result<&str, String> {
+    let mut found: Vec<(&'static str, &str)> = Vec::new();
+    for key in ["code", "script", "expression"] {
+        if let Some(v) = params.get(key) {
+            let s = v
+                .as_str()
+                .ok_or_else(|| format!("eval.{key} must be a string"))?;
+            found.push((key, s));
+        }
+    }
+    match found.len() {
+        0 => Err("missing 'code' param (aliases accepted: 'script', 'expression')".to_string()),
+        1 => Ok(found[0].1),
+        _ => Err(format!(
+            "ambiguous eval params: provide only one of {}",
+            found
+                .iter()
+                .map(|(k, _)| format!("'{k}'"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+    }
 }
 
 #[derive(Default)]
@@ -1696,7 +1725,8 @@ impl Session {
             *g = Some(body.clone());
         }
 
-        let blockmap = self.blockmap().unwrap_or(Value::Null);
+        let mut blockmap = self.blockmap().unwrap_or(Value::Null);
+        apply_status_to_blockmap(&mut blockmap, status);
         let browser_route = challenge::detect_browser_route(status, &body, &blockmap);
         self.last_challenge = challenge.clone();
         self.last_rate_limit = rate_limit.clone();
@@ -2498,8 +2528,9 @@ impl Session {
     }
 
     // Auto-detect repeated cards/articles/products/courses and normalize to
-    // {title, url, snippet, meta, image_alt, score}. A selector can scope or
-    // override detection when the page has a known card container.
+    // {title, url, snippet, price, condition, availability, meta, image_alt,
+    // score}. A selector can scope or override detection when the page has a
+    // known card container.
     fn extract_cards(
         &self,
         selector: Option<&str>,
@@ -2749,14 +2780,134 @@ impl Session {
             "(function(){{ \
                 var els = document.querySelectorAll({sel_lit}); \
                 return els.map(function(e){{ \
+                    var text = (e.textContent || '').trim(); \
                     return {{ \
                         ref: 'e:' + e._id, \
                         tag: e.tagName.toLowerCase(), \
                         attrs: e._attributes, \
-                        text: (e.textContent || '').trim().slice(0, 200) \
+                        text: text.slice(0, 200), \
+                        text_chars: text.length, \
+                        text_truncated: text.length > 200 \
                     }}; \
                 }}); \
             }})()"
+        );
+        self.eval(&code)
+    }
+
+    fn query_debug(&self, selector: &str, limit: u32) -> Result<Value> {
+        let sel_lit = serde_json::to_string(selector)?;
+        let code = format!(
+            r#"(function(){{
+                var selector = {sel_lit};
+                var limit = Math.max(0, Math.min({limit}, 50));
+                function clean(s) {{ return String(s || '').replace(/\s+/g, ' ').trim(); }}
+                function q(sel) {{ try {{ return document.querySelectorAll(sel) || []; }} catch (e) {{ return []; }} }}
+                function sample(el) {{
+                    var text = clean(el.textContent);
+                    return {{
+                        ref: 'e:' + el._id,
+                        tag: (el.tagName || '').toLowerCase(),
+                        attrs: el._attributes || {{}},
+                        text: text.slice(0, 200),
+                        text_chars: text.length,
+                        text_truncated: text.length > 200
+                    }};
+                }}
+                function countMapTop(map, max) {{
+                    var rows = [];
+                    for (var k in map) {{ if (Object.prototype.hasOwnProperty.call(map, k)) rows.push({{ value: k, count: map[k] }}); }}
+                    rows.sort(function(a, b) {{ return b.count - a.count || a.value.localeCompare(b.value); }});
+                    return rows.slice(0, max);
+                }}
+                var matches = [];
+                var valid = true;
+                var error = null;
+                try {{
+                    matches = document.querySelectorAll(selector) || [];
+                }} catch (e) {{
+                    valid = false;
+                    error = String((e && e.message) || e);
+                }}
+
+                var all = q('*');
+                var scripts = q('script');
+                var links = q('a[href]');
+                var images = q('img');
+                var tables = q('table');
+                var inputs = q('input, textarea, select');
+                var buttons = q('button, input[type=button], input[type=submit], [role=button]');
+                var headings = q('h1, h2, h3, h4, h5, h6');
+                var jsonScripts = 0;
+                for (var js = 0; js < scripts.length; js++) {{
+                    var t = String(scripts[js].getAttribute('type') || '').toLowerCase();
+                    if (t.indexOf('json') !== -1 || t.indexOf('x-magento') !== -1 || t.indexOf('x-shopify') !== -1 || t.indexOf('x-component') !== -1) jsonScripts++;
+                }}
+                var bodyTextChars = clean(document.body && document.body.textContent).length;
+
+                var topTags = {{}};
+                var topClasses = {{}};
+                var dataAttrs = {{}};
+                var ids = [];
+                for (var i = 0; i < all.length; i++) {{
+                    var el = all[i];
+                    var tag = (el.tagName || '').toLowerCase();
+                    if (tag) topTags[tag] = (topTags[tag] || 0) + 1;
+                    var cls = String(el.getAttribute('class') || '').split(/\s+/);
+                    for (var c = 0; c < cls.length; c++) {{
+                        if (cls[c]) topClasses[cls[c]] = (topClasses[cls[c]] || 0) + 1;
+                    }}
+                    var id = el.getAttribute('id');
+                    if (id && ids.length < 25) ids.push(id);
+                    var attrs = el._attributes || {{}};
+                    for (var name in attrs) {{
+                        if (!Object.prototype.hasOwnProperty.call(attrs, name)) continue;
+                        if (name.indexOf('data-') === 0 || name === 'role' || name === 'aria-label') dataAttrs[name] = (dataAttrs[name] || 0) + 1;
+                    }}
+                }}
+
+                var samples = [];
+                for (var s = 0; s < matches.length && s < limit; s++) samples.push(sample(matches[s]));
+                var hints = [];
+                if (!valid) {{
+                    hints.push('selector_error: selector could not be evaluated by unbrowser CSS support');
+                }} else if (matches.length === 0) {{
+                    hints.push('selector_miss: valid selector, no matching elements in the current DOM');
+                    if (all.length < 30 || (bodyTextChars < 4000 && scripts.length >= 10 && links.length < 30)) hints.push('thin_shell: DOM has little visible content; page may require browser rendering');
+                    if (jsonScripts > 0) hints.push('embedded_json: JSON-bearing scripts exist; try extract() or eval() against script data');
+                    if (links.length > 0) hints.push('try query_text/find_text for visible labels, or inspect selector_hints');
+                }} else if (matches.length > limit) {{
+                    hints.push('truncated_samples: matched_count exceeds returned sample limit');
+                }}
+
+                return {{
+                    selector: selector,
+                    valid_selector: valid,
+                    error: error,
+                    matched_count: matches.length,
+                    sample_count: samples.length,
+                    samples: samples,
+                    dom_summary: {{
+                        total_elements: all.length,
+                        body_text_chars: bodyTextChars,
+                        links: links.length,
+                        buttons: buttons.length,
+                        inputs: inputs.length,
+                        images: images.length,
+                        tables: tables.length,
+                        headings: headings.length,
+                        scripts: scripts.length,
+                        json_scripts: jsonScripts
+                    }},
+                    selector_hints: {{
+                        top_tags: countMapTop(topTags, 12),
+                        top_classes: countMapTop(topClasses, 20),
+                        data_attrs: countMapTop(dataAttrs, 20),
+                        ids: ids
+                    }},
+                    hints: hints
+                }};
+            }})()"#
         );
         self.eval(&code)
     }
@@ -3186,6 +3337,31 @@ impl Session {
             .map_err(|e| anyhow!("join '{href}': {e}"))?
             .to_string())
     }
+}
+
+fn apply_status_to_blockmap(blockmap: &mut Value, status: u16) {
+    if status < 400 {
+        return;
+    }
+    let Some(density) = blockmap.get_mut("density").and_then(|v| v.as_object_mut()) else {
+        return;
+    };
+    let shell_signaled = density
+        .get("thin_shell")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+        || density
+            .get("script_heavy_shell")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+    density.insert("http_error_status".to_string(), json!(status));
+    if shell_signaled {
+        density.insert("shell_signals_suppressed".to_string(), json!(true));
+        density.insert("thin_shell".to_string(), json!(false));
+        density.insert("script_heavy_shell".to_string(), json!(false));
+    }
+    density.insert("likely_js_filled".to_string(), json!(false));
 }
 
 fn discovery_route_key(raw_url: &str) -> String {
@@ -5114,6 +5290,14 @@ fn derive_tool_likelihoods(
         .get("likely_js_filled")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+    let script_heavy_shell = density
+        .get("script_heavy_shell")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let script_tags = density
+        .get("script_tags")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
 
     let selectors = blockmap.get("selectors").unwrap_or(&Value::Null);
     let data_testid = selectors
@@ -5193,6 +5377,8 @@ fn derive_tool_likelihoods(
     let td_signal = if td_total > 0 { td_ratio } else { 0.0 };
     let list_signal = if li_total > 0 { li_ratio } else { 0.0 };
     let json_signal = normalized_count(json_scripts, 1.0);
+    let script_count_signal = normalized_count(script_tags, 25.0);
+    let shell_signal = bool_score(thin_shell || likely_js_filled || script_heavy_shell);
     let network_signal = normalized_count(network_capture_count, 1.0);
     let network_bytes_signal = normalized_count(network_total_bytes, 5_000.0);
     let status_signal = if (200..400).contains(&status) {
@@ -5211,6 +5397,7 @@ fn derive_tool_likelihoods(
         + 0.10 * input_signal
         - 0.85 * bool_score(thin_shell)
         - 0.70 * bool_score(likely_js_filled)
+        - 0.85 * bool_score(script_heavy_shell)
         - 1.10 * challenge_score;
 
     let query_text_score = 0.20
@@ -5221,6 +5408,7 @@ fn derive_tool_likelihoods(
         + 0.20 * link_signal
         - 0.35 * bool_score(thin_shell)
         - 0.20 * bool_score(likely_js_filled)
+        - 0.55 * bool_score(script_heavy_shell)
         - 0.25 * challenge_score;
 
     let text_main_score = 0.15
@@ -5230,6 +5418,7 @@ fn derive_tool_likelihoods(
         + 0.10 * selector_signal
         - 0.45 * bool_score(thin_shell)
         - 0.30 * bool_score(likely_js_filled)
+        - 0.55 * bool_score(script_heavy_shell)
         - 0.15 * challenge_score;
 
     let extract_score = 0.10
@@ -5298,12 +5487,15 @@ fn derive_tool_likelihoods(
         + 0.10 * selector_signal
         - 0.25 * bool_score(thin_shell)
         - 0.20 * bool_score(likely_js_filled)
+        - 0.40 * bool_score(script_heavy_shell)
         - 0.35 * challenge_score;
 
     let chrome_escalation_score = 0.02
         + 1.90 * challenge_score
         + 0.95 * bool_score(thin_shell)
         + 0.80 * bool_score(likely_js_filled)
+        + 1.05 * bool_score(script_heavy_shell)
+        + 0.25 * script_count_signal * shell_signal
         + 0.60 * script_pathology
         + 0.40 * status_signal;
 
@@ -5447,9 +5639,16 @@ async fn main() -> Result<()> {
         println!("unbrowser {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
+    if let Some(i) = command_index(&args, "--session-daemon") {
+        return session_daemon_cmd(&args, i).await;
+    }
     if args.iter().skip(1).any(|a| is_help_flag(a)) {
         if command_index(&args, "navigate").is_some() {
             print_navigate_usage();
+        } else if command_index(&args, "session").is_some()
+            || command_index(&args, "exec").is_some()
+        {
+            print_session_usage();
         } else if command_index(&args, "policy-check").is_some() {
             print_policy_check_usage();
         } else {
@@ -5495,6 +5694,12 @@ async fn main() -> Result<()> {
     if args.get(1).map(|s| s.as_str()) == Some("policy-check") {
         return policy_check_cmd(&args[2..]);
     }
+    if let Some(i) = command_index(&args, "session") {
+        return session_cmd(&args, i).await;
+    }
+    if let Some(i) = command_index(&args, "exec") {
+        return session_exec_cmd(&args, i);
+    }
     if let Some(i) = command_index(&args, "navigate") {
         return navigate_cmd(&args, i).await;
     }
@@ -5534,6 +5739,12 @@ fn print_usage() {
 Usage:
   unbrowser [--profile <name>] [--policy=blocklist] [--shims stable|enhanced] [--mcp]
   unbrowser navigate <url> [--exec-scripts] [--json] [--events] [--shims stable|enhanced]
+  unbrowser session start [--id <id>] [--profile <name>] [--policy=blocklist] [--shims stable|enhanced]
+  unbrowser session exec [--pretty] <id|socket> <method> [params-json | shorthand args]
+  unbrowser exec [--pretty] <id|socket> <method> [params-json | shorthand args]
+  unbrowser session stop <id|socket>
+  unbrowser session list
+  unbrowser session prune
   unbrowser policy-check <url> [<url>...]
   unbrowser --list-profiles
   unbrowser --prefit-info
@@ -5541,6 +5752,7 @@ Usage:
 
 Default with no subcommand starts JSON-RPC over stdin/stdout.
 Use --mcp for Model Context Protocol server mode.
+Use session mode for shell-friendly persistent state across commands.
 "#,
         env!("CARGO_PKG_VERSION")
     );
@@ -5567,6 +5779,32 @@ fn print_policy_check_usage() {
         r#"Usage:
   unbrowser policy-check <url> [<url>...]
   unbrowser policy-check --info
+"#
+    );
+}
+
+fn print_session_usage() {
+    println!(
+        r#"Usage:
+  unbrowser session start [--id <id>] [--profile <name>] [--policy=blocklist] [--shims stable|enhanced]
+  unbrowser session exec [--pretty] <id|socket> <method> [params-json | shorthand args]
+  unbrowser exec [--pretty] <id|socket> <method> [params-json | shorthand args]
+  unbrowser session stop <id|socket>
+  unbrowser session list
+  unbrowser session prune
+
+Examples:
+  unbrowser session start
+  unbrowser session exec ub_123 navigate https://news.ycombinator.com
+  unbrowser exec ub_123 query '.titleline > a'
+  unbrowser exec --pretty ub_123 blockmap
+  unbrowser exec ub_123 eval 'document.title'
+  unbrowser session stop ub_123
+
+If the final argument after <method> is a JSON object, it is used as params.
+Otherwise common methods accept shorthand args: navigate <url>, query <selector>,
+query_debug <selector>, text [selector], click <ref>, type <ref> <text>,
+submit <ref>, eval <code>, table_to_json [selector].
 "#
     );
 }
@@ -5679,6 +5917,412 @@ fn parse_navigate_cli_args(args: &[String], command_i: usize) -> Result<Navigate
         exec_scripts,
         events,
     })
+}
+
+fn session_dir() -> PathBuf {
+    std::env::var("UNBROWSER_SESSION_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("/tmp/unbrowser-sessions"))
+}
+
+fn generate_session_id() -> String {
+    let ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    format!("ub_{}_{}", std::process::id(), ms)
+}
+
+fn validate_session_id(id: &str) -> Result<()> {
+    if id.is_empty() {
+        return Err(anyhow!("session id cannot be empty"));
+    }
+    if id.len() > 64 {
+        return Err(anyhow!("session id is too long (max 64 chars)"));
+    }
+    if !id
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.')
+    {
+        return Err(anyhow!(
+            "session id may only contain ASCII letters, digits, '.', '_' or '-'"
+        ));
+    }
+    Ok(())
+}
+
+fn session_socket_for(id_or_socket: &str) -> Result<PathBuf> {
+    if id_or_socket.contains('/') {
+        return Ok(PathBuf::from(id_or_socket));
+    }
+    validate_session_id(id_or_socket)?;
+    Ok(session_dir().join(format!("{id_or_socket}.sock")))
+}
+
+fn ensure_private_session_dir(dir: &Path) -> Result<()> {
+    std::fs::create_dir_all(dir).context("create session dir")?;
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+        .context("set session dir permissions")?;
+    Ok(())
+}
+
+fn parse_session_start_id(args: &[String], session_i: usize) -> Result<String> {
+    let mut id = None;
+    let mut i = session_i + 2;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--id" => {
+                let value = args
+                    .get(i + 1)
+                    .ok_or_else(|| anyhow!("--id requires a value"))?;
+                id = Some(value.clone());
+                i += 2;
+            }
+            a if a.starts_with("--id=") => {
+                id = Some(a.trim_start_matches("--id=").to_string());
+                i += 1;
+            }
+            "--profile" | "--shims" => i += 2,
+            a if a.starts_with("--profile=")
+                || a.starts_with("--shims=")
+                || a == "--policy=blocklist"
+                || a == "--policy=on" =>
+            {
+                i += 1;
+            }
+            other => return Err(anyhow!("unknown session start option: {other}")),
+        }
+    }
+    let id = id.unwrap_or_else(generate_session_id);
+    validate_session_id(&id)?;
+    Ok(id)
+}
+
+fn session_start_cmd(args: &[String], session_i: usize) -> Result<()> {
+    let id = parse_session_start_id(args, session_i)?;
+    let dir = session_dir();
+    ensure_private_session_dir(&dir)?;
+    let socket = dir.join(format!("{id}.sock"));
+    if socket.exists() {
+        return Err(anyhow!(
+            "session socket already exists: {} (stop it or choose --id)",
+            socket.display()
+        ));
+    }
+
+    let profile_name = parse_profile_arg(args);
+    let shim_mode = parse_shim_mode_arg(args)?;
+    let policy_block = parse_policy_arg(args);
+    let exe = std::env::current_exe().context("resolve current executable")?;
+    let mut cmd = Command::new(exe);
+    cmd.arg("--session-daemon")
+        .arg(&socket)
+        .arg("--profile")
+        .arg(&profile_name)
+        .arg("--shims")
+        .arg(shim_mode.as_str())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    if policy_block {
+        cmd.arg("--policy=blocklist");
+    }
+    let mut child = cmd.spawn().context("spawn session daemon")?;
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        if let Some(status) = child.try_wait().context("check session daemon")? {
+            return Err(anyhow!("session daemon exited early with status {status}"));
+        }
+        if session_rpc_call(&socket, "ping", json!({})).is_ok() {
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(anyhow!(
+                "session daemon did not become ready at {}",
+                socket.display()
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    println!(
+        "{}",
+        serde_json::to_string(&json!({
+            "id": id,
+            "socket": socket,
+            "pid": child.id(),
+            "profile": profile_name,
+            "shim_mode": shim_mode.as_str(),
+        }))?
+    );
+    Ok(())
+}
+
+fn parse_u32_flag(args: &[String], flag: &str, default: u32) -> Result<u32> {
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == flag {
+            let raw = args
+                .get(i + 1)
+                .ok_or_else(|| anyhow!("{flag} requires a value"))?;
+            return raw
+                .parse::<u32>()
+                .map_err(|e| anyhow!("invalid {flag} value: {e}"));
+        }
+        if let Some(raw) = args[i].strip_prefix(&format!("{flag}=")) {
+            return raw
+                .parse::<u32>()
+                .map_err(|e| anyhow!("invalid {flag} value: {e}"));
+        }
+        i += 1;
+    }
+    Ok(default)
+}
+
+fn first_shorthand_positional<'a>(args: &'a [String], value_flags: &[&str]) -> Option<&'a String> {
+    let mut i = 0;
+    while i < args.len() {
+        let arg = &args[i];
+        if value_flags.iter().any(|flag| arg == flag) {
+            i += 2;
+            continue;
+        }
+        if value_flags
+            .iter()
+            .any(|flag| arg.starts_with(&format!("{flag}=")))
+        {
+            i += 1;
+            continue;
+        }
+        if arg.starts_with('-') {
+            i += 1;
+            continue;
+        }
+        return Some(arg);
+    }
+    None
+}
+
+fn parse_session_exec_params(method: &str, raw: &[String]) -> Result<Value> {
+    if raw.is_empty() {
+        return Ok(json!({}));
+    }
+    if raw.len() == 1 && raw[0].trim_start().starts_with('{') {
+        let v: Value = serde_json::from_str(&raw[0]).context("parse params JSON")?;
+        if !v.is_object() {
+            return Err(anyhow!("params JSON must be an object"));
+        }
+        return Ok(v);
+    }
+
+    match method {
+        "navigate" => {
+            let url = raw
+                .iter()
+                .find(|a| !a.starts_with('-'))
+                .ok_or_else(|| anyhow!("navigate shorthand requires <url>"))?;
+            Ok(json!({
+                "url": url,
+                "exec_scripts": raw.iter().any(|a| a == "--exec-scripts")
+            }))
+        }
+        "query" => Ok(json!({
+            "selector": raw.first().ok_or_else(|| anyhow!("query shorthand requires <selector>"))?
+        })),
+        "query_debug" => Ok(json!({
+            "selector": raw.first().ok_or_else(|| anyhow!("query_debug shorthand requires <selector>"))?,
+            "limit": parse_u32_flag(raw, "--limit", 10)?
+        })),
+        "text" => Ok(raw
+            .first()
+            .map(|selector| json!({ "selector": selector }))
+            .unwrap_or_else(|| json!({}))),
+        "find_text" | "query_text" => Ok(json!({
+            "text": raw.first().ok_or_else(|| anyhow!("{method} shorthand requires <text>"))?,
+            "exact": raw.iter().any(|a| a == "--exact"),
+            "limit": parse_u32_flag(raw, "--limit", 20)?
+        })),
+        "click" | "submit" => Ok(json!({
+            "ref": raw.first().ok_or_else(|| anyhow!("{method} shorthand requires <ref>"))?
+        })),
+        "type" => {
+            if raw.len() < 2 {
+                return Err(anyhow!("type shorthand requires <ref> <text>"));
+            }
+            Ok(json!({ "ref": raw[0], "text": raw[1..].join(" ") }))
+        }
+        "eval" => Ok(json!({ "code": raw.join(" ") })),
+        "extract" => Ok(raw
+            .first()
+            .map(|strategy| json!({ "strategy": strategy }))
+            .unwrap_or_else(|| json!({}))),
+        "extract_table" | "table_to_json" => Ok(raw
+            .first()
+            .map(|selector| json!({ "selector": selector }))
+            .unwrap_or_else(|| json!({}))),
+        "extract_cards" => Ok(json!({
+            "selector": first_shorthand_positional(raw, &["--limit"]),
+            "limit": parse_u32_flag(raw, "--limit", 50)?
+        })),
+        "blockmap" | "body" | "text_main" | "cookies_get" | "cookies_clear" | "ping" | "close" => {
+            if raw.is_empty() {
+                Ok(json!({}))
+            } else {
+                Err(anyhow!(
+                    "{method} does not accept shorthand args; pass a JSON object instead"
+                ))
+            }
+        }
+        _ => Err(anyhow!(
+            "unknown shorthand for method '{method}'; pass params as a JSON object"
+        )),
+    }
+}
+
+fn session_rpc_call(socket: &Path, method: &str, params: Value) -> Result<Value> {
+    let mut stream = UnixStream::connect(socket)
+        .with_context(|| format!("connect session socket {}", socket.display()))?;
+    let req = json!({ "id": 1, "method": method, "params": params });
+    writeln!(stream, "{}", serde_json::to_string(&req)?)?;
+    stream.flush()?;
+
+    let mut reader = StdBufReader::new(stream);
+    let mut line = String::new();
+    reader.read_line(&mut line)?;
+    if line.trim().is_empty() {
+        return Err(anyhow!("session daemon closed without a response"));
+    }
+    let resp: Value = serde_json::from_str(&line).context("parse session response")?;
+    if let Some(err) = resp.get("error") {
+        let msg = err
+            .get("message")
+            .and_then(|v| v.as_str())
+            .unwrap_or("session command failed");
+        return Err(anyhow!(msg.to_string()));
+    }
+    Ok(resp.get("result").cloned().unwrap_or(Value::Null))
+}
+
+fn session_dispatch_error_code(message: &str) -> i32 {
+    if message.starts_with("unknown tool:") {
+        -32601
+    } else {
+        -32602
+    }
+}
+
+fn session_exec_cmd(args: &[String], exec_i: usize) -> Result<()> {
+    let mut i = exec_i + 1;
+    let pretty = args.get(i).map(|s| s.as_str()) == Some("--pretty");
+    if pretty {
+        i += 1;
+    }
+    let id_or_socket = args
+        .get(i)
+        .ok_or_else(|| anyhow!("missing session id/socket. Run `unbrowser session start`."))?;
+    let method = args
+        .get(i + 1)
+        .ok_or_else(|| anyhow!("missing method after session id"))?;
+    let params = parse_session_exec_params(method, &args[(i + 2)..])?;
+    let socket = session_socket_for(id_or_socket)?;
+    let result = session_rpc_call(&socket, method, params)?;
+    if pretty {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+    } else {
+        println!("{}", serde_json::to_string(&result)?);
+    }
+    Ok(())
+}
+
+fn session_stop_cmd(args: &[String], stop_i: usize) -> Result<()> {
+    let id_or_socket = args
+        .get(stop_i + 1)
+        .ok_or_else(|| anyhow!("missing session id/socket"))?;
+    let socket = session_socket_for(id_or_socket)?;
+    let _ = session_rpc_call(&socket, "close", json!({}))?;
+    println!(
+        "{}",
+        serde_json::to_string(&json!({ "stopped": true, "socket": socket }))?
+    );
+    Ok(())
+}
+
+fn session_list_cmd() -> Result<()> {
+    let dir = session_dir();
+    let mut sessions = Vec::new();
+    if dir.exists() {
+        for entry in std::fs::read_dir(&dir).context("read session dir")? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().and_then(|v| v.to_str()) != Some("sock") {
+                continue;
+            }
+            let id = path
+                .file_stem()
+                .and_then(|v| v.to_str())
+                .unwrap_or("")
+                .to_string();
+            let alive = session_rpc_call(&path, "ping", json!({})).is_ok();
+            sessions.push(json!({ "id": id, "socket": path, "alive": alive }));
+        }
+    }
+    println!("{}", serde_json::to_string(&sessions)?);
+    Ok(())
+}
+
+fn session_prune_cmd() -> Result<()> {
+    let dir = session_dir();
+    let mut removed = Vec::new();
+    let mut kept = 0usize;
+    if dir.exists() {
+        for entry in std::fs::read_dir(&dir).context("read session dir")? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().and_then(|v| v.to_str()) != Some("sock") {
+                continue;
+            }
+            if session_rpc_call(&path, "ping", json!({})).is_ok() {
+                kept += 1;
+                continue;
+            }
+            let id = path
+                .file_stem()
+                .and_then(|v| v.to_str())
+                .unwrap_or("")
+                .to_string();
+            std::fs::remove_file(&path).with_context(|| format!("remove {}", path.display()))?;
+            removed.push(json!({ "id": id, "socket": path }));
+        }
+    }
+    println!(
+        "{}",
+        serde_json::to_string(&json!({
+            "pruned": removed.len(),
+            "kept": kept,
+            "removed": removed,
+        }))?
+    );
+    Ok(())
+}
+
+async fn session_cmd(args: &[String], session_i: usize) -> Result<()> {
+    let sub = args
+        .get(session_i + 1)
+        .map(|s| s.as_str())
+        .unwrap_or("help");
+    match sub {
+        "start" => session_start_cmd(args, session_i),
+        "exec" => session_exec_cmd(args, session_i + 1),
+        "stop" => session_stop_cmd(args, session_i + 1),
+        "list" => session_list_cmd(),
+        "prune" => session_prune_cmd(),
+        "help" | "--help" | "-h" => {
+            print_session_usage();
+            Ok(())
+        }
+        other => Err(anyhow!("unknown session command: {other}")),
+    }
 }
 
 // `--profile <name>` or `--profile=<name>`. Falls back to UNBROWSER_PROFILE
@@ -5802,17 +6446,13 @@ async fn rpc_main(profile: Profile) -> Result<()> {
         // tunable via UNBROWSER_TIMEOUT_MS for legit-but-slow sites.
         let prev_dispatch_deadline = session.set_eval_deadline_from_now(dispatch_budget_ms);
         let resp = match req.method.as_str() {
-            "eval" => {
-                let code = req
-                    .params
-                    .get("code")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("undefined");
-                match session.eval(code) {
+            "eval" => match eval_code_param(&req.params) {
+                Ok(code) => match session.eval(code) {
                     Ok(v) => ok_response(id, v),
                     Err(e) => err_response(id, -1, e.to_string()),
-                }
-            }
+                },
+                Err(e) => err_response(id, -32602, e),
+            },
             "navigate" => match req.params.get("url").and_then(|v| v.as_str()) {
                 Some(u) => {
                     let exec = req
@@ -5838,6 +6478,20 @@ async fn rpc_main(profile: Profile) -> Result<()> {
                 },
                 None => err_response(id, -32602, "missing 'selector' param"),
             },
+            "query_debug" => {
+                let limit = req
+                    .params
+                    .get("limit")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(10) as u32;
+                match req.params.get("selector").and_then(|v| v.as_str()) {
+                    Some(s) => match session.query_debug(s, limit) {
+                        Ok(v) => ok_response(id, v),
+                        Err(e) => err_response(id, -4, e.to_string()),
+                    },
+                    None => err_response(id, -32602, "missing 'selector' param"),
+                }
+            }
             "text" => {
                 let s = req
                     .params
@@ -5992,13 +6646,17 @@ async fn rpc_main(profile: Profile) -> Result<()> {
                     Err(e) => err_response(id, -6, e.to_string()),
                 }
             }
-            "extract_table" => match req.params.get("selector").and_then(|v| v.as_str()) {
-                Some(s) => match session.extract_table(s) {
+            "extract_table" | "table_to_json" => {
+                let selector = req
+                    .params
+                    .get("selector")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("table");
+                match session.extract_table(selector) {
                     Ok(v) => ok_response(id, v),
                     Err(e) => err_response(id, -6, e.to_string()),
-                },
-                None => err_response(id, -32602, "missing 'selector' param"),
-            },
+                }
+            }
             "extract_list" => {
                 let item = req.params.get("item_selector").and_then(|v| v.as_str());
                 let fields = req.params.get("fields");
@@ -6184,10 +6842,22 @@ fn mcp_tools() -> Value {
         },
         {
             "name": "query",
-            "description": "Run a CSS selector against the current page's parsed DOM. Returns matching elements as [{ref, tag, attrs, text}]. Element refs (e:NN) are stable handles for use with click/type/submit. Selector engine supports tag, id, class, attribute matchers (=, ^=, $=, *=, ~=), all four combinators (descendant, >, +, ~), and pseudo-classes (:first/last/nth-child, :first/last/nth-of-type, :only-child/of-type). Does NOT support :not(), :has(), An+B formulas.",
+            "description": "Run a CSS selector against the current page's parsed DOM. Returns matching elements as [{ref, tag, attrs, text, text_chars, text_truncated}]. Element refs (e:NN) are stable handles for use with click/type/submit. Selector engine supports tag, id, class, attribute matchers (=, ^=, $=, *=, ~=), all four combinators (descendant, >, +, ~), pseudo-classes (:first/last/nth-child including An+B formulas, :first/last/nth-of-type, :only-child/of-type), :not(), and :has().",
             "inputSchema": {
                 "type": "object",
                 "properties": { "selector": { "type": "string", "description": "CSS selector" } },
+                "required": ["selector"]
+            }
+        },
+        {
+            "name": "query_debug",
+            "description": "Diagnose why a CSS selector did or did not match. Returns matched_count, sample matches, DOM summary counts, selector hints (top tags/classes/data attrs/ids), and actionable hints for selector_miss, thin_shell, or embedded_json. Use this when query() returns [] and you need to distinguish a bad selector from an empty/browser-rendered DOM.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "selector": { "type": "string", "description": "CSS selector to test" },
+                    "limit": { "type": "integer", "description": "Max sample matches to return (default 10, max 50)" }
+                },
                 "required": ["selector"]
             }
         },
@@ -6337,6 +7007,16 @@ fn mcp_tools() -> Value {
             }
         },
         {
+            "name": "table_to_json",
+            "description": "Alias for extract_table with a first-table default. Pulls a table into {headers, rows, row_count}; selector defaults to 'table'. Use this when an agent expects a table-to-JSON convenience tool.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "selector": { "type": "string", "description": "Optional CSS selector matching the <table> element (default: table)" }
+                }
+            }
+        },
+        {
             "name": "extract_list",
             "description": "Pull a repeated card pattern into [{...}, {...}]. Right tool for HN-style lists, search results, product grids — collapses per-site eval boilerplate. Field spec shapes: 'css selector' (text content), 'css selector @attr' (attribute), or ['css selector', '@attr'] (tuple form). If a sub-selector returns null, the field value is null.",
             "inputSchema": {
@@ -6351,7 +7031,7 @@ fn mcp_tools() -> Value {
         },
         {
             "name": "extract_cards",
-            "description": "Auto-detect repeated article/card/product/course/listing blocks and return normalized items [{title, url, snippet, meta, image_alt, score}]. Prefer this over extract_list when the page has semantically ambiguous recipe, course, product, or model cards and you do not already know field selectors. Optional selector scopes detection to known card nodes; kind can bias scoring (recipe, course, product, listing).",
+            "description": "Auto-detect repeated article/card/product/course/listing blocks and return normalized items [{title, price, condition, url, availability, snippet, meta, image_alt, score}]. Prefer this over extract_list when the page has semantically ambiguous recipe, course, product, or model cards and you do not already know field selectors. Optional selector scopes detection to known card nodes; kind can bias scoring (recipe, course, product, listing).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -6420,7 +7100,7 @@ fn mcp_tools() -> Value {
         },
         {
             "name": "eval",
-            "description": "Run arbitrary JavaScript in the embedded QuickJS runtime against the current page's parsed DOM. Returns the JSON-stringified result. Power tool — prefer query/text/blockmap when the CSS selector engine can express what you need.",
+            "description": "Run arbitrary JavaScript in the embedded QuickJS runtime against the current page's parsed DOM. Returns the JSON-stringified result. Power tool — prefer query/text/blockmap when the CSS selector engine can express what you need. Canonical param is code; raw JSON-RPC also accepts script or expression aliases and errors if no code-like param is present.",
             "inputSchema": {
                 "type": "object",
                 "properties": { "code": { "type": "string", "description": "JS code; the value of the last expression is returned" } },
@@ -6500,6 +7180,11 @@ async fn dispatch_tool(session: &mut Session, name: &str, args: &Value) -> Resul
             let sel = str_arg("selector").ok_or_else(|| anyhow!("missing 'selector'"))?;
             session.query(sel)
         }
+        "query_debug" => {
+            let sel = str_arg("selector").ok_or_else(|| anyhow!("missing 'selector'"))?;
+            let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(10) as u32;
+            session.query_debug(sel, limit)
+        }
         "text" => {
             let sel = str_arg("selector").unwrap_or("body");
             session.text(sel)
@@ -6576,6 +7261,10 @@ async fn dispatch_tool(session: &mut Session, name: &str, args: &Value) -> Resul
             let sel = str_arg("selector").ok_or_else(|| anyhow!("missing 'selector'"))?;
             session.extract_table(sel)
         }
+        "table_to_json" => {
+            let sel = str_arg("selector").unwrap_or("table");
+            session.extract_table(sel)
+        }
         "extract_list" => {
             let item =
                 str_arg("item_selector").ok_or_else(|| anyhow!("missing 'item_selector'"))?;
@@ -6619,7 +7308,7 @@ async fn dispatch_tool(session: &mut Session, name: &str, args: &Value) -> Resul
             None => Err(anyhow!("no body — call navigate first")),
         },
         "eval" => {
-            let code = str_arg("code").ok_or_else(|| anyhow!("missing 'code'"))?;
+            let code = eval_code_param(args).map_err(|e| anyhow!(e))?;
             session.eval(code)
         }
         "cookies_set" => {
@@ -6676,6 +7365,102 @@ async fn dispatch_tool(session: &mut Session, name: &str, args: &Value) -> Resul
         }
         _ => Err(anyhow!("unknown tool: {name}")),
     }
+}
+
+async fn handle_session_request(
+    session: &mut Session,
+    req: Request,
+    dispatch_budget_ms: u64,
+) -> (Response, bool) {
+    let id = req.id.clone();
+    if req.method == "close" {
+        return (ok_response(id, json!("bye")), true);
+    }
+    if req.method == "ping" {
+        return (ok_response(id, json!({ "ok": true })), false);
+    }
+    let prev = session.set_eval_deadline_from_now(dispatch_budget_ms);
+    let outcome = dispatch_tool(session, &req.method, &req.params).await;
+    session.restore_eval_deadline(prev);
+    match outcome {
+        Ok(value) => (ok_response(id, value), false),
+        Err(e) => {
+            let message = e.to_string();
+            (
+                err_response(id, session_dispatch_error_code(&message), message),
+                false,
+            )
+        }
+    }
+}
+
+async fn handle_session_stream(
+    session: &mut Session,
+    stream: UnixStream,
+    dispatch_budget_ms: u64,
+) -> Result<bool> {
+    let mut reader = StdBufReader::new(stream.try_clone().context("clone session stream")?);
+    let mut writer = stream;
+    let mut stop = false;
+    loop {
+        let mut line = String::new();
+        let n = reader
+            .read_line(&mut line)
+            .context("read session request")?;
+        if n == 0 {
+            break;
+        }
+        if line.trim().is_empty() {
+            continue;
+        }
+        let req: Request = match serde_json::from_str(&line) {
+            Ok(req) => req,
+            Err(e) => {
+                let resp = err_response(Value::Null, -32700, format!("parse error: {e}"));
+                write_response(&mut writer, &resp)?;
+                continue;
+            }
+        };
+        let (resp, should_stop) = handle_session_request(session, req, dispatch_budget_ms).await;
+        write_response(&mut writer, &resp)?;
+        if should_stop {
+            stop = true;
+            break;
+        }
+    }
+    Ok(stop)
+}
+
+async fn session_daemon_cmd(args: &[String], daemon_i: usize) -> Result<()> {
+    let socket = args
+        .get(daemon_i + 1)
+        .ok_or_else(|| anyhow!("--session-daemon requires a socket path"))?;
+    let socket = PathBuf::from(socket);
+    if let Some(parent) = socket.parent() {
+        ensure_private_session_dir(parent)?;
+    }
+    if socket.exists() {
+        std::fs::remove_file(&socket).context("remove stale session socket")?;
+    }
+
+    let profile_name = parse_profile_arg(args);
+    let profile = Profile::load(&profile_name)?;
+    let policy_block = parse_policy_arg(args);
+    let shim_mode = parse_shim_mode_arg(args)?;
+    let mut session = Session::new(&profile, policy_block, shim_mode)?;
+    let listener = UnixListener::bind(&socket)
+        .with_context(|| format!("bind session socket {}", socket.display()))?;
+    let dispatch_budget_ms = read_dispatch_budget_ms();
+
+    for stream in listener.incoming() {
+        let stream = stream.context("accept session connection")?;
+        if handle_session_stream(&mut session, stream, dispatch_budget_ms).await? {
+            break;
+        }
+    }
+
+    let _ = std::fs::remove_file(&socket);
+    Ok(())
 }
 
 async fn mcp_main(profile: Profile) -> Result<()> {
@@ -6778,7 +7563,12 @@ async fn mcp_main(profile: Profile) -> Result<()> {
 
 #[cfg(test)]
 mod cli_tests {
-    use super::{ShimMode, command_index, parse_navigate_cli_args, parse_shim_mode_arg};
+    use super::{
+        ShimMode, apply_status_to_blockmap, command_index, eval_code_param,
+        parse_navigate_cli_args, parse_session_exec_params, parse_shim_mode_arg,
+        session_dispatch_error_code, validate_session_id,
+    };
+    use serde_json::json;
 
     fn args(parts: &[&str]) -> Vec<String> {
         std::iter::once("unbrowser".to_string())
@@ -6812,6 +7602,101 @@ mod cli_tests {
         let args = args(&["navigate", "https://example.com", "https://example.org"]);
         let command_i = command_index(&args, "navigate").expect("navigate command");
         assert!(parse_navigate_cli_args(&args, command_i).is_err());
+    }
+
+    #[test]
+    fn eval_code_param_accepts_aliases_but_rejects_ambiguity() {
+        assert_eq!(eval_code_param(&json!({"code": "1+1"})).unwrap(), "1+1");
+        assert_eq!(
+            eval_code_param(&json!({"expression": "document.title"})).unwrap(),
+            "document.title"
+        );
+        assert!(eval_code_param(&json!({})).is_err());
+        assert!(eval_code_param(&json!({"code": "1", "script": "2"})).is_err());
+        assert!(eval_code_param(&json!({"code": 42})).is_err());
+    }
+
+    #[test]
+    fn http_error_suppresses_shell_density_signals() {
+        let mut blockmap = json!({
+            "density": {
+                "tables": null,
+                "td": null,
+                "li": null,
+                "json_scripts": 0,
+                "script_heavy_shell": true,
+                "thin_shell": true,
+                "likely_js_filled": true
+            }
+        });
+        apply_status_to_blockmap(&mut blockmap, 404);
+        let density = blockmap.get("density").unwrap();
+        assert_eq!(
+            density.get("thin_shell").and_then(|v| v.as_bool()),
+            Some(false)
+        );
+        assert_eq!(
+            density.get("likely_js_filled").and_then(|v| v.as_bool()),
+            Some(false)
+        );
+        assert_eq!(
+            density.get("http_error_status").and_then(|v| v.as_u64()),
+            Some(404)
+        );
+    }
+
+    #[test]
+    fn session_exec_params_support_common_shorthands() {
+        assert_eq!(
+            parse_session_exec_params("navigate", &["https://example.com".into()]).unwrap(),
+            json!({"url": "https://example.com", "exec_scripts": false})
+        );
+        assert_eq!(
+            parse_session_exec_params(
+                "query_debug",
+                &[".card".into(), "--limit".into(), "3".into()]
+            )
+            .unwrap(),
+            json!({"selector": ".card", "limit": 3})
+        );
+        assert_eq!(
+            parse_session_exec_params("type", &["e:1".into(), "hello".into(), "world".into()])
+                .unwrap(),
+            json!({"ref": "e:1", "text": "hello world"})
+        );
+        assert_eq!(
+            parse_session_exec_params("eval", &["document.title".into()]).unwrap(),
+            json!({"code": "document.title"})
+        );
+        assert_eq!(
+            parse_session_exec_params("extract_cards", &["--limit".into(), "10".into()]).unwrap(),
+            json!({"selector": null, "limit": 10})
+        );
+        assert_eq!(
+            parse_session_exec_params(
+                "extract_cards",
+                &[".product-card".into(), "--limit".into(), "3".into()]
+            )
+            .unwrap(),
+            json!({"selector": ".product-card", "limit": 3})
+        );
+        assert!(parse_session_exec_params("cookies_set", &["not-json".into()]).is_err());
+    }
+
+    #[test]
+    fn session_dispatch_error_codes_distinguish_unknown_from_bad_params() {
+        assert_eq!(session_dispatch_error_code("unknown tool: nope"), -32601);
+        assert_eq!(
+            session_dispatch_error_code("missing 'selector' param"),
+            -32602
+        );
+    }
+
+    #[test]
+    fn session_id_validation_rejects_paths() {
+        assert!(validate_session_id("ub_123-ok").is_ok());
+        assert!(validate_session_id("../bad").is_err());
+        assert!(validate_session_id("").is_err());
     }
 }
 
@@ -6900,6 +7785,115 @@ mod shim_mode_tests {
         );
         assert_eq!(
             custom.get("moduleLike").and_then(|v| v.as_bool()),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn extract_cards_commerce_avoids_broad_text_false_positives() {
+        let profile = Profile::load(profile::DEFAULT_PROFILE).expect("default profile");
+        let session = Session::new(&profile, false, ShimMode::Stable).expect("session");
+        let rows = session
+            .eval(
+                r#"(() => {
+                  document.body.innerHTML = `
+                    <main>
+                      <div class="product-card" data-price="$19.99" data-availability="InStock" data-condition="NewCondition">
+                        <a href="/p/1"><h2>Root Attr Product</h2></a>
+                      </div>
+                      <div class="product-card">
+                        <a href="/plans/2024"><h2>Pricing Guide</h2></a>
+                        <a class="price-link" href="/plans/2024">See pricing</a>
+                      </div>
+                    </main>`;
+                  return __extractCards('.product-card', 10, 'product');
+                })()"#,
+            )
+            .expect("extract cards");
+        let rows = rows.as_array().expect("rows array");
+        let root = rows
+            .iter()
+            .find(|row| row.get("title").and_then(|v| v.as_str()) == Some("Root Attr Product"))
+            .expect("root attr product");
+        assert_eq!(root.get("price").and_then(|v| v.as_str()), Some("$19.99"));
+        assert_eq!(
+            root.get("availability").and_then(|v| v.as_str()),
+            Some("in_stock")
+        );
+        assert_eq!(root.get("condition").and_then(|v| v.as_str()), Some("new"));
+
+        let guide = rows
+            .iter()
+            .find(|row| row.get("title").and_then(|v| v.as_str()) == Some("Pricing Guide"))
+            .expect("pricing guide");
+        assert!(guide.get("price").is_none_or(|v| v.is_null()));
+    }
+
+    #[test]
+    fn page_model_does_not_promote_new_research_to_product() {
+        let profile = Profile::load(profile::DEFAULT_PROFILE).expect("default profile");
+        let session = Session::new(&profile, false, ShimMode::Stable).expect("session");
+        let model = session
+            .eval(
+                r#"(() => {
+                  document.body.innerHTML = `
+                    <main>
+                      <div class="card">
+                        <a href="/research/new-york"><h2>New York research grants</h2></a>
+                        <p>Available documentation covers new research methods.</p>
+                      </div>
+                    </main>`;
+                  return __pageModel({types: ['card', 'product_card'], limit: 10});
+                })()"#,
+            )
+            .expect("page model");
+        let objects = model
+            .get("objects")
+            .and_then(|v| v.as_array())
+            .expect("objects array");
+        let card = objects
+            .iter()
+            .find(|obj| {
+                obj.get("title").and_then(|v| v.as_str()) == Some("New York research grants")
+            })
+            .expect("research card");
+        assert_eq!(card.get("kind").and_then(|v| v.as_str()), Some("card"));
+        let fields = card.get("fields").expect("fields");
+        assert!(fields.get("condition").is_none());
+        assert!(fields.get("availability").is_none());
+    }
+
+    #[test]
+    fn blockmap_script_heavy_shell_requires_sparse_visible_content() {
+        let profile = Profile::load(profile::DEFAULT_PROFILE).expect("default profile");
+        let session = Session::new(&profile, false, ShimMode::Stable).expect("session");
+        let density = session
+            .eval(
+                r#"(() => {
+                  var scripts = '';
+                  for (var i = 0; i < 25; i++) scripts += '<script src="/chunk-' + i + '.js"></script>';
+                  document.body.innerHTML = '<main><article><h1>Useful Report</h1><p>' + 'Readable SSR content. '.repeat(300) + '</p></article></main>' + scripts;
+                  return __blockmap().density;
+                })()"#,
+            )
+            .expect("blockmap");
+        assert_eq!(
+            density.get("script_heavy_shell").and_then(|v| v.as_bool()),
+            Some(false)
+        );
+
+        let density = session
+            .eval(
+                r#"(() => {
+                  var scripts = '';
+                  for (var i = 0; i < 25; i++) scripts += '<script src="/app-' + i + '.js"></script>';
+                  document.body.innerHTML = '<div id="root">Loading...</div>' + scripts;
+                  return __blockmap().density;
+                })()"#,
+            )
+            .expect("blockmap shell");
+        assert_eq!(
+            density.get("script_heavy_shell").and_then(|v| v.as_bool()),
             Some(true)
         );
     }
@@ -7464,6 +8458,33 @@ mod outcome_tests {
             &scripts,
         );
 
+        let recs = advice
+            .get("tool_recommendations")
+            .and_then(|v| v.as_array())
+            .expect("tool_recommendations array");
+        assert_eq!(recs[0].as_str(), Some("chrome_escalation"));
+    }
+
+    #[test]
+    fn tool_likelihoods_script_heavy_shell_prefers_chrome() {
+        let blockmap = json!({
+            "title": "Pinterest",
+            "structure": [],
+            "headings": [],
+            "main_headings": [],
+            "selectors": {"data_testid": 0, "aria_label": 2, "role": 1},
+            "interactives": {"links": 4, "buttons": 0, "inputs": [], "forms": []},
+            "density": {"tables": null, "td": null, "li": null, "json_scripts": 0, "script_tags": 42, "script_heavy_shell": true, "thin_shell": false, "likely_js_filled": true},
+        });
+        let advice = derive_tool_likelihoods(
+            200,
+            false,
+            &blockmap,
+            &Value::Null,
+            &Value::Null,
+            &Value::Null,
+            &Value::Null,
+        );
         let recs = advice
             .get("tool_recommendations")
             .and_then(|v| v.as_array())

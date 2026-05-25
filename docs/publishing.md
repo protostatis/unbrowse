@@ -13,12 +13,23 @@ It is intentionally separate from `skills/unbrowser/SKILL.md`, which is user-fac
 
 ## GitHub Release + PyPI
 
-1. Bump `Cargo.toml` and `python/pyproject.toml` together.
-2. Commit and push to `main`.
-3. Tag the release: `git tag -a vX.Y.Z -m "..." && git push origin vX.Y.Z`.
-4. The `release.yml` workflow builds the binaries, creates the GitHub Release,
+1. Bump `Cargo.toml`, `Cargo.lock`, `python/pyproject.toml`, and
+   `python/unbrowser/__init__.py` together.
+2. Run `python3 scripts/release_check.py --tag vX.Y.Z`, `cargo build --release --locked`, and `cargo test`.
+3. Commit and push to `main`.
+4. Tag the release: `git tag -a vX.Y.Z -m "..." && git push origin vX.Y.Z`.
+5. The `release.yml` workflow builds the binaries, creates the GitHub Release,
    and publishes Python wheels to PyPI via OIDC trusted publishing. It does
    not publish an sdist until source installs can build the native binary.
+
+After publish, verify the installed surfaces that agents use first:
+
+```bash
+unbrowser --version
+unbrowser --help
+unbrowser session --help
+unbrowser navigate https://news.ycombinator.com --json
+```
 
 ## crates.io
 

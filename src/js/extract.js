@@ -675,6 +675,123 @@
     return values;
   }
 
+  function fieldNodes(root, selector) {
+    var nodes = [];
+    try {
+      if (root.matches && root.matches(selector)) nodes.push(root);
+    } catch (e) {}
+    try {
+      var descendants = root.querySelectorAll(selector);
+      for (var i = 0; i < descendants.length; i++) nodes.push(descendants[i]);
+    } catch (e) {}
+    return nodes;
+  }
+
+  function fieldValue(root, selectors, attrs) {
+    attrs = attrs || ['content', 'value'];
+    for (var s = 0; s < selectors.length; s++) {
+      var nodes = fieldNodes(root, selectors[s]);
+      for (var i = 0; i < nodes.length; i++) {
+        for (var a = 0; a < attrs.length; a++) {
+          var v = attr(nodes[i], attrs[a]);
+          if (v) return collapseWhitespace(v);
+        }
+        var text = cleanText(nodes[i]);
+        if (text) return text;
+      }
+    }
+    return null;
+  }
+
+  function normalizePrice(text, allowBare) {
+    text = collapseWhitespace(text || '');
+    if (!text || /free\s+trial/i.test(text)) return null;
+    var currency = '(?:[$€£¥₹]|USD|CAD|AUD|GBP|EUR|JPY|INR)';
+    var amount = '\\d[\\d,]*(?:\\.\\d{2})?';
+    var re = new RegExp('(?:' + currency + '\\s*)?' + amount + '(?:\\s*[-–]\\s*(?:' + currency + '\\s*)?' + amount + ')?', 'i');
+    var m = text.match(re);
+    if (!m) return null;
+    var value = collapseWhitespace(m[0]);
+    if (!allowBare && !new RegExp(currency, 'i').test(value) && !/[€£¥₹$]/.test(value)) return null;
+    return value || null;
+  }
+
+  function normalizeAvailability(text, loose) {
+    var s = collapseWhitespace(text || '').toLowerCase();
+    if (!s) return null;
+    if (/outofstock|out of stock|sold out|unavailable|not available/.test(s)) return 'out_of_stock';
+    if (/preorder|pre-order|pre order/.test(s)) return 'preorder';
+    if (/backorder|back-order|back order/.test(s)) return 'backorder';
+    if (/instock|in stock|schema\.org\/instock/.test(s)) return 'in_stock';
+    if (loose && /available/.test(s)) return 'in_stock';
+    return null;
+  }
+
+  function normalizeCondition(text, loose) {
+    var s = collapseWhitespace(text || '').toLowerCase();
+    if (!s) return null;
+    if (/refurbished|renewed|reconditioned|refurbishedcondition/.test(s)) return 'refurbished';
+    if (/open box|open-box|openbox/.test(s)) return 'open_box';
+    if (/pre[ -]?owned|used|second hand|second-hand|usedcondition/.test(s)) return 'used';
+    if (/new condition|newcondition|brand new/.test(s)) return 'new';
+    if (loose && /^new$/.test(s)) return 'new';
+    if (/damaged|for parts|damagedcondition/.test(s)) return 'damaged';
+    return null;
+  }
+
+  function metaHasSameMeaning(value, normalized) {
+    if (!value || !normalized) return false;
+    var v = collapseWhitespace(value).toLowerCase();
+    var n = collapseWhitespace(normalized).toLowerCase();
+    return v === n || v.indexOf(n) !== -1 || n.indexOf(v) !== -1;
+  }
+
+  function commerceFields(card, title, snippet) {
+    var meta = cardMeta(card, title, snippet);
+    var priceRaw = fieldValue(card, [
+      '[itemprop="price"]', '[itemprop="lowPrice"]', '[itemprop="highPrice"]',
+      '[data-price]', '[class*="price"]', '[class*="Price"]', '.sale-price', '.amount'
+    ], ['content', 'value', 'data-price']);
+    var availabilityRaw = fieldValue(card, [
+      '[itemprop="availability"]', '[class*="availability"]', '[class*="Availability"]',
+      '[class*="stock"]', '[class*="Stock"]', '[data-availability]'
+    ], ['content', 'value', 'data-availability', 'href', 'aria-label', 'title']);
+    var conditionRaw = fieldValue(card, [
+      '[itemprop="itemCondition"]', '[class*="condition"]', '[class*="Condition"]',
+      '[class*="quality"]', '[class*="Quality"]', '[data-condition]'
+    ], ['content', 'value', 'data-condition', 'href', 'aria-label', 'title']);
+
+    var price = normalizePrice(priceRaw, true);
+    var availability = normalizeAvailability(availabilityRaw, true);
+    var condition = normalizeCondition(conditionRaw, true);
+    for (var i = 0; i < meta.length; i++) {
+      if (!price) price = normalizePrice(meta[i], false);
+      if (!availability) availability = normalizeAvailability(meta[i], true);
+      if (!condition) condition = normalizeCondition(meta[i], true);
+    }
+    var cardText = cleanText(card);
+    if (!availability) availability = normalizeAvailability(cardText, false);
+    if (!condition) condition = normalizeCondition(cardText, false);
+
+    var filtered = [];
+    for (var m = 0; m < meta.length; m++) {
+      var v = meta[m];
+      if (v === title || v === snippet) continue;
+      if (metaHasSameMeaning(v, price) || normalizePrice(v, false) === price) continue;
+      if (normalizeAvailability(v, true) === availability) continue;
+      if (normalizeCondition(v, true) === condition) continue;
+      if (filtered.indexOf(v) === -1) filtered.push(v);
+    }
+    return {
+      price: price || null,
+      availability: availability || null,
+      condition: condition || null,
+      meta: filtered
+    };
+  }
+
+  globalThis.__cardCommerceFields = commerceFields;
+
   function cardScore(card, title, anchor, kind) {
     var score = 0;
     var tag = (card.tagName || '').toLowerCase();
@@ -809,6 +926,7 @@
       var imageAlt = collapseWhitespace(attr(img, 'alt') || '');
       if (looksLikeImageArtifact(imageAlt)) imageAlt = '';
       var score = cardScore(card, title, anchor, kind);
+      var commerce = commerceFields(card, title, snippet);
       if (!selector && score < 55) continue;
       var key = (url || '') + '\n' + title;
       if (seen[key]) continue;
@@ -817,7 +935,10 @@
         title: title,
         url: url || null,
         snippet: snippet,
-        meta: cardMeta(card, title, snippet),
+        price: commerce.price,
+        condition: commerce.condition,
+        availability: commerce.availability,
+        meta: commerce.meta,
         image_alt: imageAlt || null,
         score: score
       });

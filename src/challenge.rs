@@ -59,7 +59,11 @@ pub struct RateLimit {
 
 /// Classify the response against known vendor signatures.
 ///
-/// Returns the *highest-confidence* match, or `None` on the happy path.
+/// Returns the best match, or `None` on the happy path.
+///
+/// Vendor-specific signatures outrank generic interstitial copy even when the
+/// generic copy has a higher standalone confidence. Real block pages often mix
+/// both, and the vendor result carries the actionable clearance-cookie hint.
 /// Aligned with private-core's `challenge_detection.py` — same vendor names
 /// and confidence ladder.
 pub fn detect(status: u16, body: &str) -> Option<Detection> {
@@ -114,8 +118,8 @@ pub fn detect(status: u16, body: &str) -> Option<Detection> {
                 "awswafcookiedomainlist",
                 "gokuprops",
                 "aws-waf-token",
+                "aws-waf-client",
                 "/awswaf/",
-                "challenge.js",
             ],
             "aws-waf-token",
         ),
@@ -212,7 +216,13 @@ pub fn detect(status: u16, body: &str) -> Option<Detection> {
             .copied()
             .filter(|&p| lower.contains(p))
             .collect();
-        if !matched.is_empty() && best.as_ref().is_none_or(|(_, c, _, _)| confidence > *c) {
+        if !matched.is_empty()
+            && best.as_ref().is_none_or(|(best_vendor, c, _, _)| {
+                let rank = provider_specificity(vendor);
+                let best_rank = provider_specificity(best_vendor);
+                rank > best_rank || (rank == best_rank && confidence > *c)
+            })
+        {
             best = Some((vendor, confidence, cookie, matched));
         }
     }
@@ -309,6 +319,10 @@ pub fn detect_browser_route(status: u16, body: &str, blockmap: &Value) -> Option
         .get("likely_js_filled")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+    let script_heavy_shell = density
+        .get("script_heavy_shell")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let interactives = blockmap.get("interactives").unwrap_or(&Value::Null);
     let links = interactives
         .get("links")
@@ -334,7 +348,14 @@ pub fn detect_browser_route(status: u16, body: &str, blockmap: &Value) -> Option
         .and_then(|v| v.as_array())
         .map(|a| a.len())
         .unwrap_or(0);
+    let main_heading_count = blockmap
+        .get("main_headings")
+        .and_then(|v| v.as_array())
+        .map(|a| a.len())
+        .unwrap_or(0);
     let raw_route_surface = has_raw_route_surface(&lower);
+    let script_heavy_has_usable_content =
+        script_heavy_shell && (main_heading_count > 0 || structure_count > 1 || links >= 20);
 
     let mut evidence: Vec<&'static str> = Vec::new();
     let (reason, confidence) = if contains_any(
@@ -378,7 +399,10 @@ pub fn detect_browser_route(status: u16, body: &str, blockmap: &Value) -> Option
     } else if thin_shell {
         evidence.push("blockmap.density.thin_shell");
         ("thin_shell", 0.88)
-    } else if likely_js_filled {
+    } else if script_heavy_shell && !script_heavy_has_usable_content {
+        evidence.push("blockmap.density.script_heavy_shell");
+        ("script_heavy_shell", 0.86)
+    } else if likely_js_filled && !script_heavy_has_usable_content {
         evidence.push("blockmap.density.likely_js_filled");
         ("rendered_result_required", 0.78)
     } else if structure_count == 0 && interactive_count == 0 && body.len() < 20_000 {
@@ -434,6 +458,13 @@ fn parse_retry_after_seconds(value: &str) -> Option<u64> {
 
 fn contains_any(haystack: &str, needles: &[&str]) -> bool {
     needles.iter().any(|needle| haystack.contains(needle))
+}
+
+fn provider_specificity(provider: &str) -> u8 {
+    match provider {
+        "interstitial" | "generic_human_verification" => 0,
+        _ => 1,
+    }
 }
 
 // ── Solver dispatch ──────────────────────────────────────────────────────────
@@ -579,6 +610,40 @@ mod tests {
     }
 
     #[test]
+    fn detect_perimeterx_beats_generic_interstitial_copy() {
+        let body = r#"<!doctype html><html><head>
+            <script>window._pxAppId = "PXfake";</script>
+            <script src="/_px/PXfake/init.js"></script>
+        </head><body>
+            <div id="px-captcha"></div>
+            <h1>Are you a human?</h1>
+            <p>Pardon our interruption.</p>
+        </body></html>"#;
+        let d = detect(403, body).expect("should detect perimeterx");
+        assert_eq!(d.provider, "perimeterx_block");
+        assert_eq!(d.clearance_cookie, Some("_px3"));
+        assert!(d.matched.contains(&"px-captcha"));
+    }
+
+    #[test]
+    fn detect_generic_interstitial_without_vendor_markers() {
+        let body =
+            "<html><body><h1>Are you a human?</h1><p>Pardon our interruption.</p></body></html>";
+        let d = detect(403, body).expect("should detect interstitial");
+        assert_eq!(d.provider, "interstitial");
+        assert_eq!(d.clearance_cookie, None);
+    }
+
+    #[test]
+    fn detect_generic_interstitial_with_generic_challenge_js_stays_generic() {
+        let body = r#"<html><head><script src="/assets/challenge.js"></script></head>
+            <body><h1>Are you a human?</h1><p>Pardon our interruption.</p></body></html>"#;
+        let d = detect(403, body).expect("should detect interstitial");
+        assert_eq!(d.provider, "interstitial");
+        assert_eq!(d.clearance_cookie, None);
+    }
+
+    #[test]
     fn detect_unknown_block_fallback() {
         let d = detect(403, "tiny").expect("should detect unknown");
         assert_eq!(d.provider, "unknown_block");
@@ -596,6 +661,16 @@ mod tests {
         let d = detect(202, body).expect("should detect aws waf");
         assert_eq!(d.provider, "aws_waf");
         assert_eq!(d.clearance_cookie, Some("aws-waf-token"));
+    }
+
+    #[test]
+    fn detect_aws_waf_client_beats_generic_interstitial_copy() {
+        let body = r#"<html><head><script src="/aws-waf-client.js"></script></head>
+            <body><h1>Are you a human?</h1><p>Pardon our interruption.</p></body></html>"#;
+        let d = detect(202, body).expect("should detect aws waf");
+        assert_eq!(d.provider, "aws_waf");
+        assert_eq!(d.clearance_cookie, Some("aws-waf-token"));
+        assert!(d.matched.contains(&"aws-waf-client"));
     }
 
     #[test]
@@ -679,6 +754,34 @@ mod tests {
     }
 
     #[test]
+    fn browser_route_script_heavy_shell_has_specific_reason() {
+        let blockmap = json!({
+            "title": "Target",
+            "structure": [],
+            "interactives": {"links": 6, "buttons": 0, "inputs": [], "forms": []},
+            "density": {"thin_shell": false, "likely_js_filled": true, "script_heavy_shell": true, "script_tags": 38}
+        });
+        let route = detect_browser_route(
+            200,
+            r#"<html><body><div id="root">Loading...</div><script src="/app.js"></script></body></html>"#,
+            &blockmap,
+        )
+        .expect("browser route");
+        assert_eq!(
+            route.get("reason").and_then(|v| v.as_str()),
+            Some("script_heavy_shell")
+        );
+        assert_eq!(
+            route
+                .get("evidence")
+                .and_then(|v| v.as_array())
+                .and_then(|a| a.first())
+                .and_then(|v| v.as_str()),
+            Some("blockmap.density.script_heavy_shell")
+        );
+    }
+
+    #[test]
     fn browser_route_does_not_flag_static_route_surface() {
         let blockmap = json!({
             "title": "Usable News",
@@ -694,6 +797,27 @@ mod tests {
         assert!(
             route.is_none(),
             "static links should remain cheap-path discoverable"
+        );
+    }
+
+    #[test]
+    fn browser_route_script_heavy_with_main_content_stays_cheap_path() {
+        let blockmap = json!({
+            "title": "Usable Article",
+            "structure": [{"role": "main"}, {"role": "article"}],
+            "headings": [{"level": 1, "text": "Useful Report"}],
+            "main_headings": [{"level": 1, "text": "Useful Report"}],
+            "interactives": {"links": 3, "buttons": 0, "inputs": [], "forms": []},
+            "density": {"thin_shell": false, "likely_js_filled": true, "script_heavy_shell": true, "script_tags": 30}
+        });
+        let route = detect_browser_route(
+            200,
+            r#"<html><body><main><article><h1>Useful Report</h1><p>Readable SSR content.</p></article></main></body></html>"#,
+            &blockmap,
+        );
+        assert!(
+            route.is_none(),
+            "usable SSR content should not force Chrome"
         );
     }
 

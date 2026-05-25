@@ -464,11 +464,22 @@
       links.length < 30 &&
       bodyBytes < 4000;
 
+    var allScripts = document.querySelectorAll('script');
+    // Many normal SSR pages carry 15+ analytics/chunk scripts. Treat this as
+    // a shell only when visible content and semantic structure are both sparse.
+    var scriptHeavyShell =
+      allScripts.length >= 20 &&
+      structure.length <= 1 &&
+      mainHeadings.length === 0 &&
+      links.length < 20 &&
+      bodyBytes < 6000;
+
     var likelyJsFilled =
       suspicious(tdDensity, 20) ||
       suspicious(liDensity, 30) ||
       suspicious(tableDensity, 3) ||   // even a few empty tables is a strong signal
-      thinShell;                       // SPA shell with no rendered content
+      thinShell ||                      // SPA shell with no rendered content
+      scriptHeavyShell;                 // large app shell with scripts but no visible UI
 
     // JSON-bearing script tags often carry the data the JS rendering would
     // fill in. Beyond the standard application/json + application/ld+json,
@@ -477,7 +488,6 @@
     // all of them so the density signal accurately predicts whether
     // extract() will find structured data.
     var jsonScripts = 0;
-    var allScripts = document.querySelectorAll('script[type]');
     for (var jsIdx = 0; jsIdx < allScripts.length; jsIdx++) {
       var jsType = (allScripts[jsIdx].getAttribute('type') || '').toLowerCase();
       if (jsType.indexOf('json') !== -1 ||
@@ -500,6 +510,9 @@
     }
     if (jsonScripts > 0) {
       ascii.push('  JSON SCRIPTS: ' + jsonScripts + ' (data may be embedded — try `extract()` first, it covers ld+json / __NEXT_DATA__ / Magento / Shopify)');
+    }
+    if (scriptHeavyShell) {
+      ascii.push('  SCRIPT SHELL: ' + allScripts.length + ' scripts with little visible content — likely browser-rendered');
     }
     if (selectors.data_testid || selectors.aria_label || selectors.role) {
       ascii.push('  SELECTOR HINTS: data-testid=' + selectors.data_testid + ' aria=' + selectors.aria_label + ' role=' + selectors.role);
@@ -524,6 +537,9 @@
         td: tdDensity,
         li: liDensity,
         json_scripts: jsonScripts,
+        script_tags: allScripts.length,
+        body_text_chars: bodyBytes,
+        script_heavy_shell: scriptHeavyShell,
         thin_shell: thinShell,
         likely_js_filled: likelyJsFilled,
       },
