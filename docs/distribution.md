@@ -16,8 +16,8 @@ Done:
 
 - `mcp.so`: submission issue opened at `https://github.com/chatmcp/mcpso/issues/2500`.
 - `mcpservers.org`: free submission completed with contact email `protostatis.dev@gmail.com`; site reported successful submission and review within 12 hours.
-- Glama: signed in with `protostatis.dev@gmail.com` and submitted `unbrowser` via Add Server for review; search for `unbrowser` is not public yet.
-- `punkpeye/awesome-mcp-servers`: PR opened at `https://github.com/punkpeye/awesome-mcp-servers/pull/6860`.
+- Glama: accepted and public at `https://glama.ai/mcp/servers/protostatis/unbrowser`.
+- `punkpeye/awesome-mcp-servers`: PR opened at `https://github.com/punkpeye/awesome-mcp-servers/pull/6860`; Glama badge added and checks passing.
 - `ComposioHQ/awesome-claude-skills`: PR opened at `https://github.com/ComposioHQ/awesome-claude-skills/pull/908`; checks passing after switching to a README-only external listing.
 
 Pending or blocked:
