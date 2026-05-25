@@ -15,14 +15,14 @@ Updated: 2026-05-24
 Done:
 
 - `mcp.so`: submission issue opened at `https://github.com/chatmcp/mcpso/issues/2500`.
+- `mcpservers.org`: free submission completed with contact email `protostatis.dev@gmail.com`; site reported successful submission and review within 12 hours.
 - `punkpeye/awesome-mcp-servers`: PR opened at `https://github.com/punkpeye/awesome-mcp-servers/pull/6860`.
 - `ComposioHQ/awesome-claude-skills`: PR opened at `https://github.com/ComposioHQ/awesome-claude-skills/pull/908`; checks passing after switching to a README-only external listing.
 
 Pending or blocked:
 
 - `appcypher/awesome-mcp-servers`: branch pushed to `https://github.com/protostatis/awesome-mcp-servers/tree/add-unbrowser`; `gh pr create` failed with `CreatePullRequest` permissions. Manual compare URL: `https://github.com/appcypher/awesome-mcp-servers/compare/main...protostatis:add-unbrowser`.
-- `mcpservers.org`: blocked on project/contact email.
-- Glama: likely follows `punkpeye/awesome-mcp-servers` once merged; direct claim/submission still not completed.
+- Glama: likely follows `punkpeye/awesome-mcp-servers` once merged; direct Add Server flow requires Glama signup plus CAPTCHA, so not completed here.
 - Smithery: not submitted yet; do after basic directory/listing links are live.
 
 One-liner:
@@ -180,7 +180,7 @@ Comparison copy:
 
 ## First Week Checklist
 
-1. Submit to `mcpservers.org`.
+1. Monitor `mcpservers.org` approval email at `protostatis.dev@gmail.com`.
 2. Submit to `mcp.so`.
 3. Submit/claim on Glama.
 4. Open PR to `punkpeye/awesome-mcp-servers`.
