@@ -251,7 +251,7 @@ unbrowser cookie-service --headless --profile unbrowser-cookie-service
 unbrowser router https://example.com/protected
 ```
 
-`unbrowser router` also auto-starts the local cookie service on first challenge when `unchained` is available and `UNBROWSER_COOKIE_SERVICE_URL` is not set. `--allow-host example.com` allows `example.com` and its subdomains only; broad single-label suffixes like `com` are rejected. Without an allowlist, the service rejects private/reserved IPs, localhost, and internal single-label hosts by default; use `--allow-host` to opt in to a specific internal host for local testing.
+`unbrowser router` also auto-starts the local cookie service on first challenge when `unchained` is available and `UNBROWSER_COOKIE_SERVICE_URL` is not set. `--allow-host example.com` allows `example.com` and its subdomains only; broad single-label suffixes like `com` are rejected. Without an allowlist, the service rejects private/reserved IPs, localhost, and internal single-label hosts by default; use `--allow-host` to opt in to a specific internal host for local testing. Router refuses non-loopback `UNBROWSER_COOKIE_SERVICE_URL` values by default because it posts target URLs and challenge metadata to that service; pass `--allow-remote-cookie-service` only for a trusted remote solver.
 
 ## SPA-detection diagnostics
 

@@ -31,7 +31,7 @@ Usage:
   unbrowser session list
   unbrowser session prune
   unbrowser navigate <url> [--exec-scripts] [--json] [--events] [--shims stable|enhanced]
-  unbrowser router <url> [--cookie-service <url>] [--no-auto-cookie-service]
+  unbrowser router <url> [--cookie-service <url>] [--allow-remote-cookie-service] [--no-auto-cookie-service]
   unbrowser cookie-service [--headless|--no-headless] [--port <port>] [--allow-host <host>] [--allow-remote-bind]
   unbrowser policy-check <url> [<url>...]
   unbrowser --list-profiles
