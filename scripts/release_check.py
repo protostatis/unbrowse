@@ -46,6 +46,10 @@ def version_from_cargo_lock() -> str:
     return version
 
 
+def pinned_pyunbrowser_versions(path: str) -> list[str]:
+    return re.findall(r"pyunbrowser==([0-9]+\.[0-9]+\.[0-9]+)", read(path))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--tag", help="Optional release tag, e.g. v0.0.13")
@@ -69,6 +73,15 @@ def main() -> int:
 
     require(len(set(versions.values())) == 1, "version mismatch: " + repr(versions))
     version = cargo
+
+    docker_versions = pinned_pyunbrowser_versions("Dockerfile")
+    require(docker_versions == [version], f"Dockerfile pyunbrowser pin {docker_versions!r} != {version}")
+
+    distribution_versions = pinned_pyunbrowser_versions("docs/distribution.md")
+    require(
+        version in distribution_versions,
+        f"docs/distribution.md Glama pyunbrowser pins {distribution_versions!r} do not include {version}",
+    )
 
     skill_version = version_from_skill()
     if args.strict_skill:

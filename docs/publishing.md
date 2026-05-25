@@ -61,3 +61,21 @@ clawhub publish skills/unbrowser --version X.Y.Z --changelog "..."
 
 ClawHub does not auto-sync from GitHub, and it requires `--version` explicitly.
 It will reject a reused version with `Version already exists`.
+
+## Glama hosted MCP
+
+Glama is a hosted MCP distribution channel. Keep it pinned to the same
+`pyunbrowser` version as the repo release so the hosted Inspector demo matches
+the local install path.
+
+1. Confirm the new PyPI release has Linux wheels:
+   `https://pypi.org/pypi/pyunbrowser/X.Y.Z/json`.
+2. Update the root `Dockerfile` pin to `pyunbrowser==X.Y.Z`.
+3. Update `docs/distribution.md` Glama build settings and smoke result.
+4. Run `python3 scripts/release_check.py --tag vX.Y.Z`.
+5. In Glama admin, update the Dockerfile build step:
+   `uv venv /opt/unbrowser --python 3.14 && VIRTUAL_ENV=/opt/unbrowser uv pip install pyunbrowser==X.Y.Z`.
+6. Click **Build & Release** and wait for a successful test.
+7. Verify instance logs show `serverInfo.version = "X.Y.Z"` and
+   `tools/list` returns the expected tools.
+8. Run the hosted smoke checklist in `docs/distribution.md`.
