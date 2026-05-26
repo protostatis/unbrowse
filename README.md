@@ -6,7 +6,7 @@
 
 `unbrowser` is the lightweight open-source browser tier from [Unchained](https://unchainedsky.com): cheap, stateful web access for agents when `curl`/WebFetch is too dumb and full Chrome is too heavy. When a page needs real Chrome, cookies, extensions, or human-in-the-loop auth, escalate to [`unchainedsky-cli`](https://github.com/protostatis/unchainedsky-cli) or [Unchained](https://unchainedsky.com).
 
-**Try it hosted:** Glama runs a hosted MCP release at [`glama.ai/mcp/servers/protostatis/unbrowser`](https://glama.ai/mcp/servers/protostatis/unbrowser). Click **Try in Browser** there to open a remote Inspector session, list tools, and call `navigate` without installing anything locally. For production agent workflows, install the local binary below so sessions and cookies stay on your machine.
+**Try it hosted:** Unchained exposes a public Streamable HTTP MCP endpoint at [`https://unchainedsky.com/unbrowser-mcp`](https://unchainedsky.com/unbrowser-mcp) for discovery and smoke tests. Glama also runs a hosted MCP release at [`glama.ai/mcp/servers/protostatis/unbrowser`](https://glama.ai/mcp/servers/protostatis/unbrowser), and the Smithery page is at [`smithery.ai/servers/protostatis-dev/unbrowser`](https://smithery.ai/servers/protostatis-dev/unbrowser). These hosted endpoints are shared infrastructure: do not send private cookies, secrets, or authenticated browsing tasks through them. For production workflows, install the local binary below so sessions and cookies stay on your machine.
 
 ### Install
 
@@ -46,6 +46,20 @@ unbrowser --mcp
 ```
 
 The `unchained` key is only the client-side alias. Use `unbrowser` if you want exact naming, or keep `unchained` as the breadcrumb to the full Unchained browser-agent stack.
+
+**Hosted MCP smoke/discovery endpoint** — for MCP clients that support Streamable HTTP:
+
+```json
+{
+  "mcpServers": {
+    "unbrowser-hosted": {
+      "url": "https://unchainedsky.com/unbrowser-mcp"
+    }
+  }
+}
+```
+
+Use this hosted route to inspect tools or run public-page smoke tests. It is intentionally unauthenticated and SSRF-guarded, and it is not a place to replay private cookies or secrets.
 
 **Pre-built tarball** — for systems without Python or Rust:
 
