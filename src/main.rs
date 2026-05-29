@@ -6822,7 +6822,8 @@ async fn rpc_main(profile: Profile) -> Result<()> {
 // MCP server mode (--mcp flag)
 //
 // Spec: https://modelcontextprotocol.io/  (JSON-RPC 2.0 over stdio)
-// Methods we handle: initialize, notifications/initialized, tools/list, tools/call.
+// Methods we handle: initialize, notifications/initialized, tools/list, tools/call,
+// resources/list, and prompts/list.
 // Tool surface = our RPC methods (everything except `close`, which is implicit).
 // =============================================================================
 
@@ -7506,7 +7507,7 @@ async fn mcp_main(profile: Profile) -> Result<()> {
         let result: Result<Value> = match method {
             "initialize" => Ok(json!({
                 "protocolVersion": "2025-06-18",
-                "capabilities": { "tools": {} },
+                "capabilities": { "tools": {}, "resources": {}, "prompts": {} },
                 "serverInfo": {
                     "name": "unbrowser",
                     "version": env!("CARGO_PKG_VERSION"),
@@ -7515,6 +7516,8 @@ async fn mcp_main(profile: Profile) -> Result<()> {
             })),
             "ping" => Ok(json!({})),
             "tools/list" => Ok(json!({ "tools": mcp_tools() })),
+            "resources/list" => Ok(json!({ "resources": [] })),
+            "prompts/list" => Ok(json!({ "prompts": [] })),
             "tools/call" => {
                 let name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
                 let arguments = params.get("arguments").cloned().unwrap_or(Value::Null);

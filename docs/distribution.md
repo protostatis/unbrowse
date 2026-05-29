@@ -10,23 +10,24 @@ Breadcrumb name: `unbrowser by Unchained`
 
 ## Submission Status
 
-Updated: 2026-05-25
+Updated: 2026-05-26
 
 Done:
 
-- `mcp.so`: submission issue opened at `https://github.com/chatmcp/mcpso/issues/2500`.
+- `mcp.so`: submission issue opened at `https://github.com/chatmcp/mcpso/issues/2500`; hosted endpoint follow-up posted in `https://github.com/chatmcp/mcpso/issues/2500#issuecomment-4538473171`.
 - `mcpservers.org`: free submission completed and resubmitted with contact email `protostatis.dev@gmail.com`; site reported successful submission and review within 12 hours.
 - Glama: accepted, claimed, author-verified, released at `https://glama.ai/mcp/servers/protostatis/unbrowser`, and related-server suggestions added.
 - Hosted Unchained MCP endpoint: deployed at `https://unchainedsky.com/unbrowser-mcp` for public discovery and smoke tests.
-- Smithery: published with `Unlisted` off at `https://smithery.ai/servers/protostatis-dev/unbrowser` using the hosted Unchained MCP endpoint.
-- `punkpeye/awesome-mcp-servers`: PR opened at `https://github.com/punkpeye/awesome-mcp-servers/pull/6860`; Glama badge added and checks passing.
-- `ComposioHQ/awesome-claude-skills`: PR opened at `https://github.com/ComposioHQ/awesome-claude-skills/pull/908`; checks passing after switching to a README-only external listing.
+- Smithery: published with `Unlisted` off at `https://smithery.ai/servers/protostatis-dev/unbrowser` using the hosted Unchained MCP endpoint; homepage/repository/license/backlink/icon are set.
+- `punkpeye/awesome-mcp-servers`: PR merged at `https://github.com/punkpeye/awesome-mcp-servers/pull/6860`.
+- `ComposioHQ/awesome-claude-skills`: PR opened at `https://github.com/ComposioHQ/awesome-claude-skills/pull/908`; checks passing after switching to a README-only external listing, hosted endpoint follow-up posted, and review still required.
 
 Pending or blocked:
 
 - `mcpservers.org`: public listing not yet visible after submissions.
 - `appcypher/awesome-mcp-servers`: branch pushed to `https://github.com/protostatis/awesome-mcp-servers/tree/add-unbrowser`; `gh pr create` failed with `CreatePullRequest` permissions. Manual compare URL: `https://github.com/appcypher/awesome-mcp-servers/compare/main...protostatis:add-unbrowser`.
 - Smithery exact namespace: UI created `protostatis-dev/unbrowser`; pursue `protostatis/unbrowser` only if exact namespace ownership matters.
+- Smithery verification: not verified yet. The checklist now passes successful release, homepage, and Smithery backlink; it still fails quality score because the score is exactly 80/100, exact-homepage-host TXT verification, and paid developer plan.
 
 One-liner:
 
@@ -143,7 +144,7 @@ Hosted smoke checklist for each Glama release:
 
 Latest hosted smoke result: Glama release `v0.1.1` initialized `unbrowser` `0.0.14`, exposed 32 tools, navigated Hacker News, returned 30 `.titleline > a` links, typed into HN search, and submitted to Algolia successfully.
 
-Latest score result: 100% profile completion, Server Coherence A, Tool Definition Quality A, related servers present, with 32 of 32 tools scored.
+Latest score result: Server Quality A, Server Coherence A, Tool Definition Quality A, Maintenance A, related servers present, and 32 of 32 tools scored.
 
 ### mcp.so
 
@@ -175,7 +176,9 @@ Title: `unbrowser by Unchained`
 
 Subtitle: `Lightweight browser access for agents, by Unchained.`
 
-Release result: Smithery created `protostatis-dev/unbrowser`; deployment `17045078-887b-4e70-80c6-a13a550f8c5c` completed with `SUCCESS`, retrieved `serverInfo.name = "unbrowser"`, and found 32 tools. Settings were updated with the GitHub homepage/repository and the `Unlisted` toggle is off. Current Smithery score shown by the UI is 72/100. Verification is not complete because Smithery requires score >80 plus exact-host TXT/link verification or a paid developer plan.
+Release result: Smithery created `protostatis-dev/unbrowser`; deployment `17045078-887b-4e70-80c6-a13a550f8c5c` completed with `SUCCESS`, retrieved `serverInfo.name = "unbrowser"`, and found 32 tools. Follow-up deployment `5ece747a-2ef8-42f6-8af5-363889151826` also completed with `SUCCESS` after republishing the same hosted endpoint with an explicit empty config schema. Settings now show the Unchained landing page, GitHub repository, `Apache-2.0` license, same-domain backlink, custom icon, and `Unlisted` off. Current Smithery quality score shown by the UI is 80/100; verification requires greater than 80.
+
+Verification blockers: Smithery's public verification page currently marks successful release, homepage, and backlink as passing. It still marks quality score, exact-host TXT record for `unchainedsky.com`, and paid developer plan as incomplete. The latest scan log still warns that resources and prompts could not be listed. Local MCP stdio now advertises `resources`/`prompts` and returns empty arrays for `resources/list` and `prompts/list`; this needs a new packaged/deployed release before the hosted endpoint can remove those scan warnings.
 
 Latest hosted smoke result: production endpoint initializes MCP over both `/unbrowser-mcp` and `/unbrowser-mcp/mcp`, exposes 32 tools, navigates Hacker News successfully, blocks internal/private metadata targets with 403, and returns 404 for `/unbrowser-mcp/sse`. Verified by `python3 scripts/hosted_mcp_smoke.py`.
 
@@ -248,8 +251,7 @@ Comparison copy:
 ## First Week Checklist
 
 1. Monitor `mcpservers.org` approval email at `protostatis.dev@gmail.com`.
-2. Follow up `mcp.so` issue `https://github.com/chatmcp/mcpso/issues/2500` with hosted endpoint and listing links.
-3. Follow up `punkpeye/awesome-mcp-servers` PR `https://github.com/punkpeye/awesome-mcp-servers/pull/6860` with Smithery/hosted status.
-4. Follow up `ComposioHQ/awesome-claude-skills` PR `https://github.com/ComposioHQ/awesome-claude-skills/pull/908` with Smithery/hosted status.
-5. Do not add a Composio skill folder unless their validator changes; current PR validation allows `README.md` only.
-6. Launch on HN only after enough directory/listing links are live.
+2. Monitor `mcp.so` issue `https://github.com/chatmcp/mcpso/issues/2500` after the hosted endpoint follow-up.
+3. Monitor `ComposioHQ/awesome-claude-skills` PR `https://github.com/ComposioHQ/awesome-claude-skills/pull/908` for review.
+4. Do not add a Composio skill folder unless their validator changes; current PR validation allows `README.md` only.
+5. Launch on HN only after enough directory/listing links are live.
