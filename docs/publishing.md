@@ -33,7 +33,7 @@ unbrowser navigate https://news.ycombinator.com --json
 
 ## crates.io
 
-1. Ensure `CARGO_REGISTRY_TOKEN` is available in the environment.
+1. Ensure `CARGO_REGISTRY_TOKEN` is available in the environment. For local releases, load it from the gitignored `.env` without printing it: `set -a; . ./.env; set +a`.
 2. Bump `Cargo.toml` version.
 3. Run `cargo publish` from the repo root.
 
