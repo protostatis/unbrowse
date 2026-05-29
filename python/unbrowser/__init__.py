@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote_plus, urljoin, urlparse
 
-__version__ = "0.0.14"
+__version__ = "0.0.15"
 
 __all__ = ["Client", "UnbrowserError", "find_binary", "navigate", "__version__"]
 

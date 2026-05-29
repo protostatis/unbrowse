@@ -120,7 +120,7 @@ Glama build settings:
   "pythonVersion": "3.14",
   "nodeVersion": "26",
   "buildSteps": [
-    "uv venv /opt/unbrowser --python 3.14 && VIRTUAL_ENV=/opt/unbrowser uv pip install pyunbrowser==0.0.14"
+    "uv venv /opt/unbrowser --python 3.14 && VIRTUAL_ENV=/opt/unbrowser uv pip install pyunbrowser==0.0.15"
   ],
   "cmdArguments": [
     "/opt/unbrowser/bin/unbrowser",
