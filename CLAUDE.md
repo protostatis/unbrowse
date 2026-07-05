@@ -57,7 +57,7 @@ Bot detection is the #1 reason this product gets blocked, so stealth is wired th
 
 **Impact:** Most sites (Akamai-standard, Cloudflare, nginx) accept the fingerprint. A small number of sites with custom TLS-fingerprint blacklists — notably old.reddit.com's snooserv CDN — will 403 even with correct Chrome headers. The `reddit_network_block` challenge detector catches this specific case. The real fix requires updating `wreq-util`'s BoringSSL cipher order and H2 SETTINGS order.
 
-**Maintenance:** Chrome ships every ~4 weeks; UA + Sec-CH-UA + cipher list drift constantly. Profile bumps must be cheap — single TOML edit, regenerate, test against a small fingerprinting site corpus. TLS/H2 fingerprint fixes require a `wreq-util` upstream update.
+**Maintenance:** Chrome ships every ~4 weeks; UA + Sec-CH-UA + cipher list drift constantly. Profile bumps must be cheap — single TOML edit, regenerate, test against a small fingerprinting site corpus. TLS/H2 fingerprint fixes require a `wreq-util` upstream update (note: the `0x676e67/wreq-util` repo has issues disabled; contributions may need to go via PR).
 
 ## Host functions exposed to JS
 
