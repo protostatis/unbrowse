@@ -10,7 +10,7 @@ Breadcrumb name: `unbrowser by Unchained`
 
 ## Submission Status
 
-Updated: 2026-05-26
+Updated: 2026-07-05
 
 Done:
 
@@ -21,6 +21,9 @@ Done:
 - Smithery: published with `Unlisted` off at `https://smithery.ai/servers/protostatis-dev/unbrowser` using the hosted Unchained MCP endpoint; homepage/repository/license/backlink/icon are set.
 - `punkpeye/awesome-mcp-servers`: PR merged at `https://github.com/punkpeye/awesome-mcp-servers/pull/6860`.
 - `ComposioHQ/awesome-claude-skills`: PR opened at `https://github.com/ComposioHQ/awesome-claude-skills/pull/908`; checks passing after switching to a README-only external listing, hosted endpoint follow-up posted, and review still required.
+- crates.io: `unbrowser` v0.0.16 published at `https://crates.io/crates/unbrowser`.
+- Homebrew: `protostatis/homebrew-tap` updated to v0.0.16 at `https://github.com/protostatis/homebrew-tap`.
+- ClawHub: `unbrowser` skill v0.0.16 published at `https://clawhub.com/skills/unbrowser`.
 
 Pending or blocked:
 
@@ -142,9 +145,27 @@ Hosted smoke checklist for each Glama release:
 7. Call `query` for `input[name=q]` and `form`, then `type` `wreq` into the input and `submit` the form.
 8. Expect the submit result to land on `https://hn.algolia.com/?q=wreq` with status `200`; `likely_js_filled: true` and sparse text there is expected because Algolia is an SPA shell.
 
-Latest hosted smoke result: Glama release `v0.1.1` initialized `unbrowser` `0.0.14`, exposed 32 tools, navigated Hacker News, returned 30 `.titleline > a` links, typed into HN search, and submitted to Algolia successfully.
+Latest hosted smoke result (pending Glama rebuild): Glama release `v0.1.1` initialized `unbrowser` `0.0.14`, exposed 32 tools, navigated Hacker News, returned 30 `.titleline > a` links, typed into HN search, and submitted to Algolia successfully.
 
 Latest score result: Server Quality A, Server Coherence A, Tool Definition Quality A, Maintenance A, related servers present, and 32 of 32 tools scored.
+
+## v0.0.16 Release
+
+Released 2026-07-05. Distribution streams:
+
+- **GitHub Release**: binary tarballs for 4 platforms + SHA256 checksums at `https://github.com/protostatis/unbrowser/releases/tag/v0.0.16`
+- **PyPI**: `pip install pyunbrowser==0.0.16` — platform wheels bundling native binary
+- **crates.io**: `cargo install unbrowser` — v0.0.16
+- **Homebrew**: `brew install protostatis/tap/unbrowser` — v0.0.16
+- **ClawHub**: skill v0.0.16 published at `https://clawhub.com/skills/unbrowser`
+- **Glama**: Dockerfile pins `pyunbrowser==0.0.16` — Build & Release needs admin UI
+- **Smithery**: uses hosted Unchained MCP endpoint (not version-specific)
+
+Changes:
+- Bump default Chrome profile 134→147 (fresh UA/Sec-CH-UA headers)
+- Add `reddit_network_block` challenge detector for old.reddit.com TLS-fingerprint 403s
+- Update old.reddit.com prefit entry with routing hint
+- Document wreq BoringSSL TLS/H2 fingerprint drift as known limitation
 
 ### mcp.so
 
