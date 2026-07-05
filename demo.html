@@ -1,0 +1,884 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>unbrowser — 10 websites, one binary, no Chrome</title>
+<meta name="description" content="Live demo: unbrowser fetches structured data from 10 real websites in seconds. One 10MB binary, no Chrome install.">
+<style>
+:root {
+  --bg: #0f0d0a;
+  --surface: #1a1612;
+  --surface-2: #241f1a;
+  --border: #362f28;
+  --text: #e8dfd3;
+  --text-muted: #8a7e72;
+  --accent: #d95b2b;
+  --accent-hover: #e86e3e;
+  --green: #2e9d5c;
+  --blue: #3d8fd4;
+  --amber: #d4a33d;
+  --font: ui-monospace, 'SF Mono', 'Cascadia Code', 'JetBrains Mono', 'Fira Code', monospace;
+  --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+  min-height: 100vh;
+  line-height: 1.5;
+  background-image:
+    radial-gradient(ellipse at 20% 20%, rgba(217, 91, 43, 0.06) 0%, transparent 50%),
+    radial-gradient(ellipse at 80% 80%, rgba(61, 143, 212, 0.04) 0%, transparent 50%);
+}
+
+/* Header */
+.header {
+  max-width: 1060px;
+  margin: 0 auto;
+  padding: 48px 18px 0;
+}
+.header-badge {
+  display: inline-block;
+  font-family: var(--font);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .12em;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  padding: 4px 8px;
+  margin-bottom: 16px;
+}
+.header h1 {
+  font-size: clamp(36px, 6vw, 64px);
+  font-weight: 800;
+  letter-spacing: -.04em;
+  line-height: 1.0;
+}
+.header h1 em { color: var(--accent); font-style: normal; }
+.header p {
+  color: var(--text-muted);
+  font-size: clamp(15px, 2vw, 20px);
+  max-width: 640px;
+  margin: 12px 0 0;
+  line-height: 1.45;
+}
+
+/* Controls */
+.controls {
+  max-width: 1060px;
+  margin: 0 auto;
+  padding: 32px 18px;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font);
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  border: 2px solid var(--border);
+  border-radius: 999px;
+  padding: 10px 20px;
+  background: var(--surface-2);
+  color: var(--text);
+  cursor: pointer;
+  transition: all .15s ease;
+}
+.btn:hover { background: var(--border); border-color: var(--text-muted); }
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.btn-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+.btn:disabled { opacity: .4; cursor: wait; }
+.btn .spinner { display: none; width: 14px; height: 14px; border: 2px solid transparent; border-top-color: currentColor; border-radius: 50%; animation: spin .6s linear infinite; }
+.btn.loading .spinner { display: inline-block; }
+.btn.loading .label-text { opacity: .7; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Counter bar */
+.counters {
+  max-width: 1060px;
+  margin: 0 auto;
+  padding: 0 18px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+}
+.counter {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px 14px;
+}
+.counter-label {
+  font-family: var(--font);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color: var(--text-muted);
+}
+.counter-value {
+  font-family: var(--font);
+  font-size: 28px;
+  font-weight: 700;
+  margin-top: 2px;
+  color: var(--text);
+}
+.counter-value .unit { font-size: 14px; color: var(--text-muted); }
+
+/* Grid */
+.grid {
+  max-width: 1060px;
+  margin: 0 auto;
+  padding: 0 18px 48px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
+  gap: 12px;
+}
+
+/* Card */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  transition: border-color .2s ease;
+}
+.card.status-loading { border-color: var(--blue); }
+.card.status-done { border-color: var(--green); }
+.card.status-error { border-color: var(--accent); }
+.card.status-pending { opacity: .5; }
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.card-site {
+  font-family: var(--font);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.card-site:hover { color: var(--blue); }
+.card-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-top: 3px;
+}
+.card.status-pending .card-status-dot { background: var(--text-muted); }
+.card.status-loading .card-status-dot { background: var(--blue); animation: pulse 1s ease infinite; }
+.card.status-done .card-status-dot { background: var(--green); }
+.card.status-error .card-status-dot { background: var(--accent); }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+
+.card-title {
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.2;
+  margin-bottom: 8px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.card-metrics {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.card-metric {
+  font-family: var(--font);
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.card-metric strong { color: var(--text); font-weight: 600; }
+
+.card-headlines {
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+  margin-top: 4px;
+}
+.card-headline {
+  font-size: 13px;
+  color: var(--text-muted);
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin-bottom: 3px;
+}
+.card-headline::before {
+  content: "→ ";
+  color: var(--green);
+  font-family: var(--font);
+}
+.card-empty { color: var(--text-muted); font-size: 13px; padding: 20px 0; text-align: center; }
+.card-error { color: var(--accent); font-family: var(--font); font-size: 11px; margin-top: 6px; }
+
+/* Footer */
+.footer {
+  max-width: 1060px;
+  margin: 0 auto;
+  padding: 0 18px 48px;
+  border-top: 1px solid var(--border);
+  padding-top: 24px;
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  flex-wrap: wrap;
+  font-family: var(--font);
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.footer a { color: var(--text-muted); }
+.footer a:hover { color: var(--text); }
+
+/* Config drawer */
+.config-drawer {
+  max-width: 1060px;
+  margin: 0 auto;
+  padding: 0 18px 24px;
+}
+.config-toggle {
+  font-family: var(--font);
+  font-size: 11px;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 10px;
+  background: transparent;
+  cursor: pointer;
+}
+.config-toggle:hover { color: var(--text); border-color: var(--text-muted); }
+.config-box {
+  display: none;
+  margin-top: 10px;
+  background: #0d0b08;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  font-family: var(--font);
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-x: auto;
+  color: var(--text-muted);
+}
+.config-box.open { display: block; }
+.config-box .comment { color: #5c5045; }
+.config-box .key { color: var(--blue); }
+.config-box .str { color: var(--green); }
+.config-box .op { color: var(--text-muted); }
+
+/* Timeline bar at bottom */
+.timeline {
+  max-width: 1060px;
+  margin: 0 auto 24px;
+  padding: 0 18px;
+}
+.timeline-bar {
+  height: 20px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  display: flex;
+  overflow: hidden;
+}
+.timeline-bar div {
+  height: 100%;
+  transition: width .3s ease;
+  position: relative;
+}
+.timeline-bar .seg-success { background: var(--green); }
+.timeline-bar .seg-error { background: var(--accent); }
+.timeline-bar .seg-pending { background: var(--surface-2); }
+.timeline-bar .seg-loading { background: var(--blue); }
+.timeline-legend {
+  display: flex;
+  gap: 14px;
+  margin-top: 6px;
+  font-family: var(--font);
+  font-size: 10px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+.timeline-legend span::before { content: "■ "; }
+.timeline-legend .ok::before { color: var(--green); }
+.timeline-legend .err::before { color: var(--accent); }
+
+@media (max-width: 640px) {
+  .grid { grid-template-columns: 1fr; }
+  .counters { grid-template-columns: repeat(2, 1fr); }
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-badge">Live Demo</div>
+  <h1>10 websites, <em>one binary</em>,<br>no Chrome installed</h1>
+  <p>Watch unbrowser fetch structured data from real websites in real time — all from a 10MB binary running on the server. Each card shows extracted headlines, links, headings, and structure.</p>
+</div>
+
+<div class="controls">
+  <button class="btn btn-primary" id="runBtn" onclick="runAll()">
+    <span class="spinner"></span>
+    <span class="label-text">Fetch All</span>
+  </button>
+  <button class="btn" onclick="resetAll()">Reset</button>
+  <span id="runningCounter" style="font-family:var(--font);font-size:12px;color:var(--text-muted);margin-left:auto;display:none"></span>
+</div>
+
+<div class="counters" id="counters">
+  <div class="counter">
+    <div class="counter-label">Pages</div>
+    <div class="counter-value"><span id="cPages">0</span><span class="unit"> / 11</span></div>
+  </div>
+  <div class="counter">
+    <div class="counter-label">Links found</div>
+    <div class="counter-value"><span id="cLinks">0</span></div>
+  </div>
+  <div class="counter">
+    <div class="counter-label">Headlines extracted</div>
+    <div class="counter-value"><span id="cHeadlines">0</span></div>
+  </div>
+  <div class="counter">
+    <div class="counter-label">Time elapsed</div>
+    <div class="counter-value"><span id="cTime">0</span><span class="unit">s</span></div>
+  </div>
+</div>
+
+<div class="grid" id="grid"></div>
+
+<div class="timeline" id="timelineWrap" style="display:none">
+  <div class="timeline-bar" id="timelineBar"></div>
+  <div class="timeline-legend">
+    <span class="ok">success</span>
+    <span class="err">blocked / error</span>
+  </div>
+</div>
+
+<div class="config-drawer">
+  <button class="config-toggle" onclick="document.getElementById('configBox').classList.toggle('open')">▸ How to run this locally</button>
+  <div class="config-box" id="configBox">
+    <span class="comment"># Install the binary</span><br>
+    <span class="op">pip install pyunbrowser&nbsp;&nbsp;</span><span class="comment"># or: cargo install unbrowser</span><br><br>
+    <span class="comment"># Add to Claude Desktop (4 lines of JSON)</span><br>
+    {<br>
+    &nbsp;&nbsp;<span class="str">"mcpServers"</span>: {<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="str">"unbrowser"</span>: {<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="str">"command"</span>: <span class="str">"unbrowser"</span>,<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="str">"args"</span>: [<span class="str">"--mcp"</span>]<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;}<br>
+    &nbsp;&nbsp;}<br>
+    }<br><br>
+    <span class="comment"># Or use from Python directly</span><br>
+    <span class="op">from</span> unbrowser <span class="op">import</span> Client<br>
+    <span class="op">with</span> Client() <span class="op">as</span> ub:<br>
+    &nbsp;&nbsp;r = ub.navigate(<span class="str">"https://news.ycombinator.com"</span>)<br>
+    &nbsp;&nbsp;<span class="op">print</span>(r.blockmap.title)
+  </div>
+</div>
+
+<div class="footer">
+  <span>unbrowser by <a href="https://unchainedsky.com">Unchained</a></span>
+  <span><a href="https://github.com/protostatis/unbrowser">GitHub</a> · <a href="https://smithery.ai/servers/protostatis-dev/unbrowser">Smithery</a> · Apache 2.0</span>
+</div>
+
+<script>
+// ─── Site list ──────────────────────────────────────────────────────────
+const SITES = [
+  {
+    id: 'hn',
+    url: 'https://news.ycombinator.com',
+    label: 'Hacker News',
+    icon: 'HN',
+    extract: (bm) => {
+      const links = bm.interactives?.link_samples?.slice(0, 6) || [];
+      const headlines = links.filter(l => l.score >= 44 && l.text && !l.text.startsWith('vote?id=')).slice(0, 6);
+      return {
+        links: bm.interactives?.links || 0,
+        headings: bm.headings?.length || 0,
+        structures: bm.structure?.length || 0,
+        headlines: headlines.map(l => l.text),
+        status: bm.interactives?.links > 0 ? 'ok' : 'empty',
+      };
+    }
+  },
+  {
+    id: 'wikipedia',
+    url: 'https://en.wikipedia.org/wiki/Rust_(programming_language)',
+    label: 'Wikipedia — Rust article',
+    icon: 'WP',
+    extract: (bm) => {
+      return {
+        links: bm.interactives?.links || 0,
+        headings: bm.headings?.length || 0,
+        structures: bm.structure?.length || 0,
+        headlines: (bm.headings || []).slice(0, 6).map(h => 'h' + h.level + ' ' + h.text),
+        status: bm.headings?.length > 0 ? 'ok' : 'empty',
+      };
+    }
+  },
+  {
+    id: 'bbc',
+    url: 'https://www.bbc.com',
+    label: 'BBC News',
+    icon: 'BBC',
+    extract: (bm) => {
+      const mids = (bm.structure || []).filter(s => s.role === 'nav' || s.role === 'section');
+      return {
+        links: bm.interactives?.links || 0,
+        headings: bm.headings?.length || 0,
+        structures: bm.structure?.length || 0,
+        headlines: mids.slice(0, 6).map(s => s.ident + ' — ' + (s.summary || '').slice(0, 60)),
+        status: bm.structure?.length > 1 ? 'ok' : 'empty',
+      };
+    }
+  },
+  {
+    id: 'npmjs',
+    url: 'https://www.npmjs.com',
+    label: 'npm (homepage)',
+    icon: 'npm',
+    extract: (bm) => {
+      return {
+        links: bm.interactives?.links || 0,
+        headings: bm.headings?.length || 0,
+        structures: bm.structure?.length || 0,
+        headlines: (bm.headings || []).slice(0, 6).map(h => h.text),
+        status: bm.title !== '(untitled)' ? 'ok' : 'empty',
+      };
+    }
+  },
+  {
+    id: 'arxiv',
+    url: 'https://arxiv.org/list/cs.CL/recent',
+    label: 'arXiv — NLP listings',
+    icon: 'AR',
+    extract: (bm) => {
+      return {
+        links: bm.interactives?.links || 0,
+        headings: bm.headings?.length || 0,
+        structures: bm.structure?.length || 0,
+        headlines: (bm.headings || []).slice(0, 6).map(h => h.text),
+        status: (bm.interactives?.links || 0) > 10 ? 'ok' : 'empty',
+      };
+    }
+  },
+  {
+    id: 'github',
+    url: 'https://github.com/protostatis/unbrowser',
+    label: 'GitHub — unbrowser repo',
+    icon: 'GH',
+    extract: (bm) => {
+      return {
+        links: bm.interactives?.links || 0,
+        headings: bm.headings?.length || 0,
+        structures: bm.structure?.length || 0,
+        headlines: (bm.headings || []).slice(0, 6).map(h => h.text),
+        status: bm.title ? 'ok' : 'empty',
+      };
+    }
+  },
+  {
+    id: 'coingecko',
+    url: 'https://www.coingecko.com',
+    label: 'CoinGecko',
+    icon: 'CG',
+    extract: (bm) => {
+      return {
+        links: bm.interactives?.links || 0,
+        headings: bm.headings?.length || 0,
+        structures: bm.structure?.length || 0,
+        headlines: (bm.headings || []).slice(0, 6).map(h => h.text),
+        status: (bm.interactives?.links || 0) > 10 ? 'ok' : 'empty',
+      };
+    }
+  },
+  {
+    id: 'duckduckgo',
+    url: 'https://html.duckduckgo.com/html/',
+    label: 'DuckDuckGo (HTML)',
+    icon: 'DD',
+    extract: (bm) => {
+      return {
+        links: bm.interactives?.links || 0,
+        headings: bm.headings?.length || 0,
+        structures: bm.structure?.length || 0,
+        headlines: (bm.headings || []).slice(0, 6).map(h => h.text),
+        status: (bm.interactives?.links || 0) > 10 ? 'ok' : 'empty',
+      };
+    }
+  },
+  {
+    id: 'docs_rs',
+    url: 'https://docs.rs/serde/latest/serde/',
+    label: 'docs.rs — serde docs',
+    icon: 'DR',
+    extract: (bm) => {
+      return {
+        links: bm.interactives?.links || 0,
+        headings: bm.headings?.length || 0,
+        structures: bm.structure?.length || 0,
+        headlines: (bm.headings || []).slice(0, 6).map(h => h.text),
+        status: bm.title ? 'ok' : 'empty',
+      };
+    }
+  },
+  {
+    id: 'stackoverflow',
+    url: 'https://stackoverflow.com/questions',
+    label: 'Stack Overflow',
+    icon: 'SO',
+    extract: (bm) => {
+      return {
+        links: bm.interactives?.links || 0,
+        headings: bm.headings?.length || 0,
+        structures: bm.structure?.length || 0,
+        headlines: (bm.headings || []).slice(0, 6).map(h => h.text),
+        status: (bm.interactives?.links || 0) > 10 ? 'ok' : 'empty',
+      };
+    }
+  },
+  {
+    id: 'lobsters',
+    url: 'https://lobste.rs',
+    label: 'Lobsters',
+    icon: 'LB',
+    extract: (bm) => {
+      return {
+        links: bm.interactives?.links || 0,
+        headings: bm.headings?.length || 0,
+        structures: bm.structure?.length || 0,
+        headlines: (bm.headings || []).slice(0, 6).map(h => h.text),
+        status: (bm.interactives?.links || 0) > 10 ? 'ok' : 'empty',
+      };
+    }
+  },
+];
+
+// ─── MCP client ─────────────────────────────────────────────────────────
+const MCP_ENDPOINT = '/unbrowser-mcp';
+
+async function mcpRequest(method, body, sessionId) {
+  const headers = {
+    'Content-Type': 'application/json',
+    'Accept': 'application/json, text/event-stream',
+  };
+  if (sessionId) headers['mcp-session-id'] = sessionId;
+  const resp = await fetch(MCP_ENDPOINT, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body),
+  });
+  const sid = resp.headers.get('mcp-session-id');
+  const data = await resp.json();
+  return { data, sessionId: sid || sessionId };
+}
+
+async function mcpNavigate(url) {
+  // Step 1: Initialize a fresh session
+  let { data, sessionId } = await mcpRequest('initialize', {
+    jsonrpc: '2.0', id: crypto.randomUUID(),
+    method: 'initialize',
+    params: {
+      protocolVersion: '2024-11-05',
+      capabilities: {},
+      clientInfo: { name: 'demo-page', version: '1.0' },
+    },
+  });
+  if (data.error) throw new Error(data.error.message);
+
+  // Step 2: Notify initialized
+  await mcpRequest('notifications/initialized', {
+    jsonrpc: '2.0', id: crypto.randomUUID(),
+    method: 'notifications/initialized',
+    params: {},
+  }, sessionId);
+
+  // Step 3: Navigate
+  let { data: navData } = await mcpRequest('tools/call', {
+    jsonrpc: '2.0', id: crypto.randomUUID(),
+    method: 'tools/call',
+    params: { name: 'navigate', arguments: { url } },
+  }, sessionId);
+
+  if (navData.error) throw new Error(navData.error.message);
+
+  // Parse the navigate result
+  const content = navData.result?.content || [];
+  for (const item of content) {
+    if (item.type === 'text') {
+      try {
+        return JSON.parse(item.text);
+      } catch (e) {
+        return item.text;
+      }
+    }
+  }
+  return null;
+}
+
+// ─── UI state ────────────────────────────────────────────────────────────
+const state = {};
+let running = false;
+let startTime = 0;
+let timerInterval = null;
+
+function initCards() {
+  const grid = document.getElementById('grid');
+  grid.innerHTML = '';
+  SITES.forEach(site => {
+    const card = document.createElement('div');
+    card.className = 'card status-pending';
+    card.id = 'card-' + site.id;
+    card.innerHTML = `
+      <div class="card-header">
+        <span class="card-site"><span style="color:var(--accent);font-weight:700">${site.icon}</span> ${site.label}</span>
+        <span class="card-status-dot"></span>
+      </div>
+      <div class="card-title" id="title-${site.id}">—</div>
+      <div class="card-metrics" id="metrics-${site.id}"></div>
+      <div class="card-headlines" id="headlines-${site.id}"></div>
+    `;
+    grid.appendChild(card);
+    state[site.id] = { card, status: 'pending' };
+  });
+}
+
+function updateCard(siteId, { status, title, links, headings, structures, headlines, error }) {
+  const card = document.getElementById('card-' + siteId);
+  if (!card) return;
+  card.className = 'card status-' + status;
+
+  const titleEl = document.getElementById('title-' + siteId);
+  titleEl.textContent = title || '—';
+
+  const metricsEl = document.getElementById('metrics-' + siteId);
+  const parts = [];
+  if (links !== undefined) parts.push(`<span class="card-metric"><strong>${links}</strong> links</span>`);
+  if (headings !== undefined) parts.push(`<span class="card-metric"><strong>${headings}</strong> headings</span>`);
+  if (structures !== undefined) parts.push(`<span class="card-metric"><strong>${structures}</strong> sections</span>`);
+  metricsEl.innerHTML = parts.join('');
+
+  const hlEl = document.getElementById('headlines-' + siteId);
+  if (headlines && headlines.length > 0) {
+    hlEl.innerHTML = headlines.map(h => `<div class="card-headline">${escapeHtml(h)}</div>`).join('');
+  } else {
+    hlEl.innerHTML = '';
+  }
+
+  if (error) {
+    hlEl.innerHTML = `<div class="card-error">${escapeHtml(error)}</div>`;
+  }
+
+  state[siteId].status = status;
+}
+
+function escapeHtml(s) {
+  if (!s) return '';
+  const div = document.createElement('div');
+  div.textContent = s;
+  return div.innerHTML;
+}
+
+async function fetchSite(site) {
+  updateCard(site.id, { status: 'loading' });
+
+  try {
+    const result = await mcpNavigate(site.url);
+
+    if (!result) {
+      updateCard(site.id, { status: 'error', error: 'No result returned' });
+      return;
+    }
+
+    const statusCode = result.status;
+    const bm = result.blockmap || {};
+    const challenge = result.challenge;
+
+    if (challenge) {
+      updateCard(site.id, {
+        status: 'error',
+        title: bm.title || site.label,
+        error: `🚫 ${challenge.provider || 'Bot wall'} — ${challenge.hint || 'blocked'}`,
+      });
+      return;
+    }
+
+    if (statusCode >= 400) {
+      updateCard(site.id, {
+        status: 'error',
+        title: bm.title || site.label,
+        error: `HTTP ${statusCode}`,
+      });
+      return;
+    }
+
+    const extracted = site.extract(bm);
+    updateCard(site.id, {
+      status: extracted.status === 'ok' ? 'done' : 'error',
+      title: bm.title || site.label,
+      links: extracted.links,
+      headings: extracted.headings,
+      structures: extracted.structures,
+      headlines: extracted.headlines,
+      error: extracted.status === 'ok' ? null : 'Page returned empty content',
+    });
+
+  } catch (e) {
+    updateCard(site.id, {
+      status: 'error',
+      error: e.message || 'Request failed',
+    });
+  }
+}
+
+async function runAll() {
+  if (running) return;
+  running = true;
+  startTime = Date.now();
+
+  const btn = document.getElementById('runBtn');
+  btn.classList.add('loading');
+  btn.disabled = true;
+  document.getElementById('runningCounter').style.display = 'inline';
+  document.getElementById('timelineWrap').style.display = 'block';
+
+  // Reset all cards
+  SITES.forEach(s => initCardState(s.id));
+
+  // Reset counters
+  document.getElementById('cPages').textContent = '0';
+  document.getElementById('cLinks').textContent = '0';
+  document.getElementById('cHeadlines').textContent = '0';
+  document.getElementById('cTime').textContent = '0';
+
+  if (timerInterval) clearInterval(timerInterval);
+  timerInterval = setInterval(() => {
+    const elapsed = Math.floor((Date.now() - startTime) / 1000);
+    document.getElementById('cTime').textContent = elapsed;
+  }, 200);
+
+  // Fetch all sites with concurrency limit
+  const MAX_CONCURRENT = 4;
+  let completed = 0;
+  const totalLinks = [0];
+  const totalHeadlines = [0];
+
+  async function worker(site) {
+    await fetchSite(site);
+    completed++;
+    document.getElementById('cPages').textContent = completed;
+
+    // Aggregate counters
+    const s = state[site.id];
+    if (s.status === 'done') {
+      const card = document.getElementById('card-' + site.id);
+      // Extract visible numbers from card
+      const metrics = card.querySelectorAll('.card-metric');
+      metrics.forEach(m => {
+        const strong = m.querySelector('strong');
+        if (strong) {
+          const val = parseInt(strong.textContent);
+          const text = m.textContent;
+          if (!isNaN(val)) {
+            if (text.includes('links')) totalLinks[0] += val;
+            else if (text.includes('headings')) totalHeadlines[0] += val;
+          }
+        }
+      });
+    }
+
+    document.getElementById('cLinks').textContent = totalLinks[0];
+    document.getElementById('cHeadlines').textContent = totalHeadlines[0];
+    updateTimeline();
+  }
+
+  // Launch workers with concurrency limit
+  const queue = [...SITES];
+  const workers = [];
+  for (let i = 0; i < MAX_CONCURRENT && i < queue.length; i++) {
+    workers.push(runWorker(queue, worker));
+  }
+  await Promise.all(workers);
+
+  // Done
+  running = false;
+  btn.classList.remove('loading');
+  btn.disabled = false;
+  document.getElementById('runningCounter').style.display = 'none';
+  if (timerInterval) clearInterval(timerInterval);
+  const elapsed = Math.floor((Date.now() - startTime) / 1000);
+  document.getElementById('cTime').textContent = elapsed;
+
+  updateTimeline();
+}
+
+function initCardState(id) {
+  state[id] = { status: 'pending' };
+}
+
+async function runWorker(queue, workerFn) {
+  while (queue.length > 0) {
+    const site = queue.shift();
+    await workerFn(site);
+  }
+}
+
+function updateTimeline() {
+  const bar = document.getElementById('timelineBar');
+  bar.innerHTML = '';
+  const total = SITES.length;
+  SITES.forEach(site => {
+    const s = state[site.id];
+    const seg = document.createElement('div');
+    seg.style.width = (100 / total) + '%';
+    if (s.status === 'done') seg.className = 'seg-success';
+    else if (s.status === 'error') seg.className = 'seg-error';
+    else if (s.status === 'loading') seg.className = 'seg-loading';
+    else seg.className = 'seg-pending';
+    bar.appendChild(seg);
+  });
+}
+
+function resetAll() {
+  if (running) return;
+  if (timerInterval) clearInterval(timerInterval);
+  document.getElementById('cPages').textContent = '0';
+  document.getElementById('cLinks').textContent = '0';
+  document.getElementById('cHeadlines').textContent = '0';
+  document.getElementById('cTime').textContent = '0';
+  document.getElementById('timelineWrap').style.display = 'none';
+  initCards();
+}
+
+// ─── Init ────────────────────────────────────────────────────────────────
+initCards();
+</script>
+</body>
+</html>

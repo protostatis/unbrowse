@@ -128,7 +128,12 @@ pub fn detect(status: u16, body: &str) -> Option<Detection> {
         // network security." with a link to file a support ticket. Not
         // solvable without real Chrome; confidence 0.90 so it beats
         // generic_human_verification (0.76) and outranks unknown_block.
-        ("reddit_network_block", 0.90, &["you've been blocked by network security"], ""),
+        (
+            "reddit_network_block",
+            0.90,
+            &["you've been blocked by network security"],
+            "",
+        ),
         // Reddit's JS proof-of-work — solvable without real Chrome.
         // Confidence is 0.95 so it beats generic_human_verification (0.76)
         // when both patterns fire on the same page.
@@ -601,7 +606,10 @@ mod tests {
     fn detect_reddit_network_block_beats_generic() {
         let body = "<html><body><h1>Access Denied</h1><p>You've been blocked by network security.</p></body></html>";
         let d = detect(403, body).expect("should detect");
-        assert_eq!(d.provider, "reddit_network_block", "reddit_network_block should beat generic_human_verification");
+        assert_eq!(
+            d.provider, "reddit_network_block",
+            "reddit_network_block should beat generic_human_verification"
+        );
     }
 
     #[test]
