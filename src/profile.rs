@@ -34,15 +34,17 @@ pub struct Profile {
     pub device_memory: u32,
 }
 
+const PROFILE_CHROME_147: &str = include_str!("../profiles/chrome_147.toml");
 const PROFILE_CHROME_134: &str = include_str!("../profiles/chrome_134.toml");
 const PROFILE_CHROME_131: &str = include_str!("../profiles/chrome_131.toml");
 
 const BUILTIN: &[(&str, &str)] = &[
+    ("chrome_147", PROFILE_CHROME_147),
     ("chrome_134", PROFILE_CHROME_134),
     ("chrome_131", PROFILE_CHROME_131),
 ];
 
-pub const DEFAULT_PROFILE: &str = "chrome_134";
+pub const DEFAULT_PROFILE: &str = "chrome_147";
 
 impl Profile {
     pub fn load(name: &str) -> Result<Profile> {

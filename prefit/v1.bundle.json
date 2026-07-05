@@ -697,7 +697,7 @@
     },
     "old.reddit.com": {
       "domain": "old.reddit.com",
-      "framework": null,
+      "framework": "reddit_legacy",
       "blocklist_additions": [],
       "required_patterns": [],
       "settle_distribution": {
@@ -705,7 +705,7 @@
         "p90_ms": 0,
         "p95_ms": 0
       },
-      "shape_hint": null,
+      "shape_hint": "TLS-fingerprinted. wreq BoringSSL JA3 mismatch triggers 403. Use managed Chrome (CDP) or upgrade wreq TLS/H2 fingerprint. www.reddit.com uses JS challenge (auto-solvable).",
       "posteriors": {
         "settle_fast:web_components": {
           "alpha": 6.0,

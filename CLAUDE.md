@@ -37,7 +37,7 @@ The four-way landscape:
 
 ## Stealth mode (native, on by default)
 
-Bot detection is the #1 reason this product gets blocked, so stealth is wired through every layer rather than retrofitted. Driven by versioned **profiles** (`profiles/chrome_134.toml` etc.) so all the signals stay coherent and a Chrome bump is one config change.
+Bot detection is the #1 reason this product gets blocked, so stealth is wired through every layer rather than retrofitted. Driven by versioned **profiles** (`profiles/chrome_147.toml` etc.) so all the signals stay coherent and a Chrome bump is one config change.
 
 **The six layers:**
 
