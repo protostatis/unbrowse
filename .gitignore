@@ -34,3 +34,8 @@
 
 # Local scratch files
 /skills/_awesome-pr.md
+
+# Stray workspace files
+demo.html
+demo_server.py
+_test_persistence.txt
