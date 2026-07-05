@@ -53,7 +53,11 @@ Bot detection is the #1 reason this product gets blocked, so stealth is wired th
 - ✅ Defeats: Cloudflare Bot Fight Mode (commodity tier), Datadome (basic), Akamai BMP (light), PerimeterX (light), most homegrown header/UA checks
 - ❌ Won't beat: FingerprintJS Pro at high sensitivity, Cloudflare Turnstile interactive challenges, Kasada, Arkose Labs MatchKey. Those need real Chrome + residential IP.
 
-**Maintenance:** Chrome ships every ~4 weeks; UA + Sec-CH-UA + cipher list drift constantly. Profile bumps must be cheap — single TOML edit, regenerate, test against a small fingerprinting site corpus.
+**Known limitation — wreq BoringSSL TLS/H2 fingerprint drift:** The `wreq` crate's BoringSSL TLS configuration (`cipher order, extension set, curves`) and H2 SETTINGS frame order (`HeaderTableSize first vs real Chrome's MaxConcurrentStreams first`) have drifted from what real Chrome sends. This produces a JA3 hash (`c476e5df...`) that does NOT match any real Chrome version. All wreq-util profiles v132–v147 share the same underlying TLS/H2 settings — bumping the profile version only changes headers, not the wire fingerprint.
+
+**Impact:** Most sites (Akamai-standard, Cloudflare, nginx) accept the fingerprint. A small number of sites with custom TLS-fingerprint blacklists — notably old.reddit.com's snooserv CDN — will 403 even with correct Chrome headers. The `reddit_network_block` challenge detector catches this specific case. The real fix requires updating `wreq-util`'s BoringSSL cipher order and H2 SETTINGS order.
+
+**Maintenance:** Chrome ships every ~4 weeks; UA + Sec-CH-UA + cipher list drift constantly. Profile bumps must be cheap — single TOML edit, regenerate, test against a small fingerprinting site corpus. TLS/H2 fingerprint fixes require a `wreq-util` upstream update.
 
 ## Host functions exposed to JS
 

@@ -1,4 +1,4 @@
-# Chrome 134 on macOS — current default. Refreshed 2026-05.
+# Chrome 134 on macOS — legacy default (replaced by chrome_147). Refreshed 2026-05.
 # All values are set together so the TLS fingerprint, HTTP/2 ordering,
 # headers, and JS-side navigator/window properties stay coherent. Bumping
 # Chrome means editing one of these files, not chasing values across the
