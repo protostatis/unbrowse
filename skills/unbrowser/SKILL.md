@@ -84,7 +84,7 @@ Do not retry `unbrowser` on these. Hand off to the managed browser:
 
 The default workflow is **unbrowser first**, not **unbrowser only**. If the user explicitly says `unbrowser only`, do not use the managed browser/CDP; return the `unbrowser` failure signal and ask before escalating.
 
-- Escalate only after a concrete signal: non-null `challenge`, `likely_js_filled` with no usable JSON store, a visual/browser-only requirement, interactive auth, or explicit user approval.
+- Escalate only after a concrete signal, such as: non-null `challenge`, `likely_js_filled` with no usable JSON store, a visual/browser-only requirement, interactive auth, or explicit user approval.
 - Do not escalate just because selectors need iteration. Use `query_debug`, `discover`, `page_model`, `network_extract`, `extract`, or site-specific cheap endpoints first.
 - For Reddit tasks, try `old.reddit.com` and `.json` endpoints with `unbrowser` before escalating. HTTP 403/429, missing JSON data, or bot-wall signals are valid escalation reasons, but they must be reported.
 - Keep managed-browser/CDP usage read-only on public pages unless the user explicitly authorizes login, cookies, posting, messaging, purchases, or other account actions.
