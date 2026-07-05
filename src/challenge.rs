@@ -20,9 +20,13 @@ use serde_json::{Value, json};
 const HINT_ESCALATE: &str = "Solve once in real Chrome (or via unchainedsky CLI), copy the clearance \
      cookie via DevTools, paste with cookies_set, then retry navigate. \
      Cookie typically lasts 30 min \u{2013} 24 h.";
-
 const HINT_BODY: &str = "Inspect `body` to identify the vendor, escalate to real Chrome to confirm \
      the page renders, or skip this URL.";
+
+const HINT_REDDIT_NETWORK_BLOCK: &str = "This is a TLS-fingerprint or network-level block. A real Chrome session \
+     may work, but there is typically no reusable clearance cookie to copy. \
+     Do not retry unbrowser with cookie-copy; escalate to managed browser \
+     (CDP) for this URL.";
 
 // `missing_primary_action` is intentionally weak: it is useful as a detector
 // signal for JS-only shells, but too noisy to force Chrome unless confidence is
@@ -56,6 +60,13 @@ pub struct RateLimit {
 }
 
 // ── Detection ────────────────────────────────────────────────────────────────
+
+fn provider_hint(provider: &str) -> &'static str {
+    match provider {
+        "reddit_network_block" => HINT_REDDIT_NETWORK_BLOCK,
+        _ => HINT_ESCALATE,
+    }
+}
 
 /// Classify the response against known vendor signatures.
 ///
@@ -251,7 +262,7 @@ pub fn detect(status: u16, body: &str) -> Option<Detection> {
                 Some(cookie)
             },
             reason: format!("Matched {vendor} challenge signatures."),
-            hint: HINT_ESCALATE,
+            hint: provider_hint(vendor),
         });
     }
 
@@ -600,6 +611,11 @@ mod tests {
         assert!(d.confidence >= 0.9);
         assert!(d.blocked);
         assert_eq!(d.clearance_cookie, None);
+        assert!(
+            d.hint.contains("no reusable clearance cookie"),
+            "hint should warn that no clearance cookie is available, got: {}",
+            d.hint
+        );
     }
 
     #[test]

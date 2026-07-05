@@ -1,4 +1,8 @@
-# Chrome 147 on macOS — current default. Refreshed 2026-07.
+# Chrome 147 on macOS — current default for HEADERS and JS navigator values.
+# Refreshed 2026-07. Note: TLS/H2 fingerprint (cipher order, extension set,
+# H2 SETTINGS frame order) is set by wreq-util and is identical across
+# all profiles v132–v147. The header bump keeps the UA/Sec-CH-UA current;
+# it does NOT change the wire TLS fingerprint. See CLAUDE.md known limitations.
 # All values are set together so the TLS fingerprint, HTTP/2 ordering,
 # headers, and JS-side navigator/window properties stay coherent. Bumping
 # Chrome means editing one of these files, not chasing values across the
