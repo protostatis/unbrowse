@@ -145,7 +145,7 @@ Hosted smoke checklist for each Glama release:
 7. Call `query` for `input[name=q]` and `form`, then `type` `wreq` into the input and `submit` the form.
 8. Expect the submit result to land on `https://hn.algolia.com/?q=wreq` with status `200`; `likely_js_filled: true` and sparse text there is expected because Algolia is an SPA shell.
 
-Latest hosted smoke result (pending Glama rebuild): Glama release `v0.1.1` initialized `unbrowser` `0.0.14`, exposed 32 tools, navigated Hacker News, returned 30 `.titleline > a` links, typed into HN search, and submitted to Algolia successfully.
+Latest hosted smoke result: Glama release `v0.1.2` built on `pyunbrowser==0.0.16` (`019f3405`), status: published. Previous: `v0.1.1` initialized `unbrowser` `0.0.14`, exposed 32 tools, navigated Hacker News, returned 30 `.titleline > a` links, typed into HN search, and submitted to Algolia successfully.
 
 Latest score result: Server Quality A, Server Coherence A, Tool Definition Quality A, Maintenance A, related servers present, and 32 of 32 tools scored.
 
