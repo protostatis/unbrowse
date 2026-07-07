@@ -1,10 +1,12 @@
 # unbrowser
 
-**Web access for LLM agents. One static binary. No Chrome.**
+**The agent-native browser. One static binary. No Chrome.**
 
 [![unbrowser MCP server](https://glama.ai/mcp/servers/protostatis/unbrowser/badges/score.svg)](https://glama.ai/mcp/servers/protostatis/unbrowser)
 
-`unbrowser` is the lightweight open-source browser tier from [Unchained](https://unchainedsky.com): cheap, stateful web access for agents when `curl`/WebFetch is too dumb and full Chrome is too heavy. When a page needs real Chrome, cookies, extensions, or human-in-the-loop auth, escalate to [`unchainedsky-cli`](https://github.com/protostatis/unchainedsky-cli) or [Unchained](https://unchainedsky.com).
+`unbrowser` is the lightweight open-source browser tier from [Unchained](https://unchainedsky.com): a vertically integrated browser runtime and LLM interface for agents. It gives you stateful web access when `curl`/WebFetch is too dumb and full Chrome is too heavy: JavaScript execution, cookies, forms, clicks, challenge detection, and compact BlockMap output are designed to work together as one unit.
+
+It is not Chrome made smaller. It is the browser interface rebuilt around what agents need before escalating to Chrome. When a page needs real pixels, V8 compatibility, extensions, or human-in-the-loop auth, escalate to [`unchainedsky-cli`](https://github.com/protostatis/unchainedsky-cli) or [Unchained](https://unchainedsky.com).
 
 **Try it hosted:** Unchained exposes a public Streamable HTTP MCP endpoint at [`https://unchainedsky.com/unbrowser-mcp`](https://unchainedsky.com/unbrowser-mcp) for discovery and smoke tests. Glama also runs a hosted MCP release at [`glama.ai/mcp/servers/protostatis/unbrowser`](https://glama.ai/mcp/servers/protostatis/unbrowser), and the Smithery page is at [`smithery.ai/servers/protostatis-dev/unbrowser`](https://smithery.ai/servers/protostatis-dev/unbrowser). These hosted endpoints are shared infrastructure: do not send private cookies, secrets, or authenticated browsing tasks through them. For production workflows, install the local binary below so sessions and cookies stay on your machine.
 
@@ -118,7 +120,9 @@ Open source under Apache 2.0. When the cheap path can't handle a page (heavy SPA
 
 ## Agent-friendly by design
 
-This isn't a Chrome wrapper that an agent uses through a Puppeteer-shaped abstraction. It's a browser whose every output is shaped for LLM consumption:
+Most browser tools start with a human browser and bolt on an agent interface: Chrome, CDP, Playwright, screenshots, accessibility trees, or raw HTML. `unbrowser` takes the opposite path. The runtime, DOM model, interaction handles, policy hooks, challenge detector, and output format are co-designed for agents.
+
+That vertical integration is the point: the browser can skip the rendering stack and return exactly what the model needs to orient, decide, and act.
 
 - **`navigate` returns a BlockMap** — ~500 tokens of structured page summary (landmarks, headings, interactives, density signals) right in the response. No follow-up call needed to know what's on the page.
 - **Stable element refs** (`e:142`) — query, click, type, submit using opaque handles. The LLM never has to scrape the DOM itself.
@@ -127,7 +131,9 @@ This isn't a Chrome wrapper that an agent uses through a Puppeteer-shaped abstra
 - **MCP-native** — `unbrowser --mcp` exposes the RPC tool surface to any MCP host (Claude Code, Claude Desktop, Cursor, Cline). 4 lines of config, zero glue code.
 - **Real Chrome fingerprint** (Chrome 134 JA4 + Akamai H2 hash) so sites don't block you for being a script.
 
-For pages that *do* need real Chrome (heavy SPAs, JS-challenge bot walls), the binary detects them and accepts cookies via `cookies_set` — so you solve once in Chrome and replay forever here.
+Use Chrome when you need pixels: screenshots, layout, canvas, WebGL, CAPTCHA solving, extensions, or maximum compatibility. Use `unbrowser` when your agent needs the page to run: JavaScript, cookies, links, forms, clicks, and a compact representation made for LLM context windows.
+
+For pages that *do* need real Chrome (heavy SPAs, JS-challenge bot walls), the binary detects them and accepts cookies via `cookies_set` — so you solve once in Chrome and replay the session here for as long as the clearance cookie lasts.
 
 ## Quick demo — Hacker News top 3
 
