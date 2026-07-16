@@ -4,6 +4,8 @@
 
 [![unbrowser MCP server](https://glama.ai/mcp/servers/protostatis/unbrowser/badges/score.svg)](https://glama.ai/mcp/servers/protostatis/unbrowser)
 
+**Official MCP Registry identity:** `mcp-name: io.github.protostatis/unbrowser`
+
 `unbrowser` is the lightweight open-source browser tier from [Unchained](https://unchainedsky.com): a vertically integrated browser runtime and LLM interface for agents. It gives you stateful web access when `curl`/WebFetch is too dumb and full Chrome is too heavy: JavaScript execution, cookies, forms, clicks, challenge detection, and compact BlockMap output are designed to work together as one unit.
 
 **See the runtime before installing:** [run the live public-web demo](https://unchainedsky.com/unbrowser?utm_source=github&utm_medium=repository&utm_campaign=unbrowser_readme&ref=readme_live_demo). No account is required. The demo accepts only the fixed public source sets shown on the page; do not use it for private data or authenticated browsing.
