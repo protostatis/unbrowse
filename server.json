@@ -1,0 +1,46 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.protostatis/unbrowser",
+  "title": "unbrowser by Unchained",
+  "description": "Chrome-free MCP web access for agents with low-token page maps and browser escalation hints.",
+  "repository": {
+    "url": "https://github.com/protostatis/unbrowser",
+    "source": "github",
+    "id": "1226093137"
+  },
+  "version": "0.0.17",
+  "websiteUrl": "https://unchainedsky.com/unbrowser",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "pyunbrowser",
+      "version": "0.0.17",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "--mcp"
+        }
+      ]
+    },
+    {
+      "registryType": "cargo",
+      "registryBaseUrl": "https://crates.io",
+      "identifier": "unbrowser",
+      "version": "0.0.17",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "--mcp"
+        }
+      ]
+    }
+  ]
+}

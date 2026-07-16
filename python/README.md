@@ -1,5 +1,7 @@
 # unbrowser
 
+<!-- mcp-name: io.github.protostatis/unbrowser -->
+
 **Web access for LLM agents. One static binary. No Chrome.**
 
 Single-file native headless browser optimized for LLM agents. Runs JavaScript via QuickJS, returns a low-token page summary on every navigate, and gives you stable element refs for click/type/submit. Tens of MB RAM per session, no Chrome dependency.
