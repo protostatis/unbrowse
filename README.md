@@ -118,6 +118,8 @@ Open source under Apache 2.0. When the cheap path can't handle a page (heavy SPA
 
 **5–10× lower memory, 25× smaller binary, 10× faster cold start, 70× lower per-page token cost.** That's the tradeoff this product makes — defer JS-rendering (Phase 4/5) and pixel rendering (out of scope) in exchange for a footprint that fits in places Chrome doesn't.
 
+Need broader implementation context? Browse the [source-backed Browser Agents & MCP guide](https://searchagentsky.com/guides/browser-agents-mcp?utm_source=github&utm_medium=repository&utm_campaign=unbrowser_guide) from Search Agent Sky by Unchained.
+
 ## Agent-friendly by design
 
 Most browser tools start with a human browser and bolt on an agent interface: Chrome, CDP, Playwright, screenshots, accessibility trees, or raw HTML. `unbrowser` takes the opposite path. The runtime, DOM model, interaction handles, policy hooks, challenge detector, and output format are co-designed for agents.
