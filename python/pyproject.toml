@@ -6,8 +6,9 @@ build-backend = "hatchling.build"
 # Distribution name `pyunbrowser` (not `unbrowser`) because PyPI's name
 # moderation blocked `unbrowser` on typosquat-prevention grounds (it's too
 # close to `browser`). The `py-` prefix is the established PyPI workaround
-# (cf. python-dateutil → `from dateutil import ...`); the import name and
-# binary stay `unbrowser` everywhere else.
+# (cf. python-dateutil → `from dateutil import ...`). The import name and
+# primary binary stay `unbrowser`; `pyunbrowser` is an equivalent compatibility
+# entry point so Registry clients can execute the PyPI identifier with `uvx`.
 name = "pyunbrowser"
 version = "0.0.17"
 description = "Web access for LLM agents. One static binary. No Chrome."
@@ -42,11 +43,12 @@ Issues = "https://github.com/protostatis/unbrowser/issues"
 # the router's transparent challenge-cookie handoff path.
 solver = ["unchainedsky-cli"]
 
-# `pip install pyunbrowser` installs an `unbrowser` script on $PATH that
-# execs the bundled native binary. Lets MCP hosts use `command: "unbrowser"`
-# without knowing the wheel's site-packages path.
+# `pip install pyunbrowser` installs the primary `unbrowser` script and a
+# `pyunbrowser` compatibility alias. Both dispatch to the same CLI; the alias
+# makes the Registry-derived `uvx pyunbrowser --mcp` command executable.
 [project.scripts]
 unbrowser = "unbrowser._cli:main"
+pyunbrowser = "unbrowser._cli:main"
 
 # The wheel ships the platform-specific native binary inside unbrowser/_bin/.
 # CI builds the binary first (cargo build --release for each target), copies

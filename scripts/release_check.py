@@ -18,6 +18,7 @@ REGISTRY_OWNERSHIP_MARKER = f"mcp-name: {REGISTRY_NAME}"
 CARGO_OWNERSHIP_LINE = f"**Official MCP Registry identity:** `{REGISTRY_OWNERSHIP_MARKER}`"
 PYPI_OWNERSHIP_MARKER = f"<!-- {REGISTRY_OWNERSHIP_MARKER} -->"
 CANONICAL_CLAWHUB_URL = "https://clawhub.ai/protostatis/skills/unbrowser"
+PYTHON_CLI_ENTRY_POINT = "unbrowser._cli:main"
 
 
 def read(path: str) -> str:
@@ -55,6 +56,17 @@ def version_from_cargo_lock() -> str:
 
 def pinned_pyunbrowser_versions(path: str) -> list[str]:
     return re.findall(r"pyunbrowser==([0-9]+\.[0-9]+\.[0-9]+)", read(path))
+
+
+def validate_python_entry_points(project: object) -> None:
+    require(isinstance(project, dict), "python/pyproject.toml [project] must be a table")
+    scripts = project.get("scripts")
+    require(isinstance(scripts, dict), "python/pyproject.toml [project.scripts] must be a table")
+    for command in ("unbrowser", "pyunbrowser"):
+        require(
+            scripts.get(command) == PYTHON_CLI_ENTRY_POINT,
+            f"python/pyproject.toml must expose {command!r} as {PYTHON_CLI_ENTRY_POINT!r}",
+        )
 
 
 def validate_registry_manifest(manifest: object, version: str) -> None:
@@ -109,7 +121,9 @@ def main() -> int:
 
     cargo = tomllib.loads(read("Cargo.toml"))["package"]["version"]
     cargo_lock = version_from_cargo_lock()
-    pyproject = tomllib.loads(read("python/pyproject.toml"))["project"]["version"]
+    python_project = tomllib.loads(read("python/pyproject.toml"))["project"]
+    validate_python_entry_points(python_project)
+    pyproject = python_project["version"]
     module = version_from_init()
     versions = {
         "Cargo.toml": cargo,

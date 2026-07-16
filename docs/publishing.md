@@ -87,6 +87,9 @@ Owner-gated publish sequence:
 2. Publish and verify both underlying `0.0.17` packages first: `pyunbrowser` on
    PyPI and `unbrowser` on crates.io. Their rendered package READMEs must expose
    `mcp-name: io.github.protostatis/unbrowser` before Registry publication.
+   Also run the exact PyPI command derived from `server.json`,
+   `uvx pyunbrowser==0.0.17 --mcp`, through an MCP initialize/tools smoke test;
+   the `pyunbrowser` console-script alias exists specifically for this path.
 3. Run `mcp-publisher validate`. This is a manifest/schema check; it does not
    prove end-to-end package ownership, so a passing result is not permission to
    publish.

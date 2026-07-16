@@ -20,7 +20,6 @@ Done:
 - Hosted Unchained MCP endpoint: deployed at `https://unchainedsky.com/unbrowser-mcp` for public discovery and smoke tests.
 - Smithery: published with `Unlisted` off at `https://smithery.ai/servers/protostatis-dev/unbrowser` using the hosted Unchained MCP endpoint; homepage/repository/license/backlink/icon are set.
 - `punkpeye/awesome-mcp-servers`: PR merged at `https://github.com/punkpeye/awesome-mcp-servers/pull/6860`.
-- `ComposioHQ/awesome-claude-skills`: PR opened at `https://github.com/ComposioHQ/awesome-claude-skills/pull/908`; checks passing after switching to a README-only external listing, hosted endpoint follow-up posted, and review still required.
 - crates.io: `unbrowser` v0.0.16 published at `https://crates.io/crates/unbrowser`.
 - Homebrew: `protostatis/homebrew-tap` updated to v0.0.16 at `https://github.com/protostatis/homebrew-tap`.
 - ClawHub: `unbrowser` skill v0.0.17 published at `https://clawhub.ai/protostatis/skills/unbrowser`.
@@ -28,6 +27,7 @@ Done:
 Pending or blocked:
 
 - `mcpservers.org`: public listing not yet visible after submissions.
+- `ComposioHQ/awesome-claude-skills`: PR `https://github.com/ComposioHQ/awesome-claude-skills/pull/908` was closed by the owner account on 2026-07-03 without merge; do not reopen it without new owner direction.
 - `appcypher/awesome-mcp-servers`: branch pushed to `https://github.com/protostatis/awesome-mcp-servers/tree/add-unbrowser`; `gh pr create` failed with `CreatePullRequest` permissions. Manual compare URL: `https://github.com/appcypher/awesome-mcp-servers/compare/main...protostatis:add-unbrowser`.
 - Smithery exact namespace: UI created `protostatis-dev/unbrowser`; pursue `protostatis/unbrowser` only if exact namespace ownership matters.
 - Smithery verification: not verified yet. The checklist now passes successful release, homepage, and Smithery backlink; it still fails quality score because the score is exactly 80/100, exact-homepage-host TXT verification, and paid developer plan.
