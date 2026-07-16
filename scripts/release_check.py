@@ -91,6 +91,12 @@ def main() -> int:
     skill = read("skills/unbrowser/SKILL.md")
     pycli = read("python/unbrowser/_cli.py")
 
+    require(
+        "https://unchainedsky.com/unbrowser?utm_source=github&utm_medium=repository&utm_campaign=unbrowser_readme&ref=readme_live_demo"
+        in readme,
+        "README missing attributed live Unbrowser demo URL",
+    )
+
     for needle in [
         "unbrowser session start",
         "unbrowser exec",
