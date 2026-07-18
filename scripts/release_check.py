@@ -82,7 +82,11 @@ def validate_registry_manifest(manifest: object, version: str) -> None:
             "id": "1226093137",
         },
         "version": version,
-        "websiteUrl": "https://unchainedsky.com/unbrowser",
+        "websiteUrl": (
+            "https://unchainedsky.com/unbrowser?ref=official_mcp_registry"
+            "&utm_source=official_mcp_registry&utm_medium=mcp_directory"
+            "&utm_campaign=unbrowser_registry_v0017_launch"
+        ),
     }
     for field, expected in expected_metadata.items():
         require(manifest.get(field) == expected, f"server.json {field} {manifest.get(field)!r} != {expected!r}")
