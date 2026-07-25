@@ -31,6 +31,37 @@ with Client() as ub:                # (PyPI's name moderation blocks 'unbrowser'
     r = ub.navigate("https://news.ycombinator.com")   # py- prefix is the standard workaround)
 ```
 
+**Docker (Linux amd64/arm64)** — minimal distroless image, non-root, ~13 MiB pull:
+
+```bash
+docker pull ghcr.io/protostatis/unbrowser:latest
+
+# One-shot navigation
+docker run --rm ghcr.io/protostatis/unbrowser:latest \
+  navigate https://example.com --json
+
+# MCP over stdio (default)
+docker run --rm -i ghcr.io/protostatis/unbrowser:latest
+```
+
+For an MCP host that launches Docker:
+
+```json
+{
+  "mcpServers": {
+    "unbrowser": {
+      "command": "docker",
+      "args": [
+        "run", "--rm", "-i",
+        "ghcr.io/protostatis/unbrowser:latest"
+      ]
+    }
+  }
+}
+```
+
+Pin `:vX.Y.Z` or an image digest in production. The image has no shell or package manager, and container state disappears when the container exits.
+
 **Cargo** — binary only, no Python wrapper:
 
 ```bash
@@ -102,7 +133,7 @@ unbrowser session stop demo
 echo '{"id":1,"method":"navigate","params":{"url":"https://news.ycombinator.com"}}' | unbrowser
 ```
 
-That's the install. Runs anywhere a static binary runs — laptop, Lambda, Cloudflare Workers, edge, embedded.
+That's the install. Runs anywhere a native binary runs — laptop, Lambda, Docker, CI, edge containers.
 
 Open source under Apache 2.0. When the cheap path can't handle a page (heavy SPAs, behavioral bot challenges), escalate to a real browser via [`unchainedsky-cli`](https://github.com/protostatis/unchainedsky-cli) (drives your local Chrome via CDP) or the [Unchained desktop app](https://unchainedsky.com).
 
@@ -117,7 +148,7 @@ Open source under Apache 2.0. When the cheap path can't handle a page (heavy SPA
 | Cold start     | **~100ms**     | ~1s                                      |
 | Tokens / page (LLM) | **~500** (BlockMap inline) | tens of thousands of HTML, parsed by you |
 | Install steps  | `cargo build`  | install Chrome + Node + Playwright + system deps |
-| Lambda / Workers / edge | ✅      | ❌ Chrome too big                        |
+| Lambda / Docker / edge containers | ✅      | ❌ Chrome too big                        |
 | 100K pages/day cost | $0 (your infra) | $$$ Chrome fleet or hosted API     |
 
 **5–10× lower memory, 25× smaller binary, 10× faster cold start, 70× lower per-page token cost.** That's the tradeoff this product makes — defer JS-rendering (Phase 4/5) and pixel rendering (out of scope) in exchange for a footprint that fits in places Chrome doesn't.
@@ -231,7 +262,7 @@ Empirical, not aspirational. Latest matrix: **28/30** on tested categories.
 | Static / SSR pages | ✅ | ✅ but token-heavy | overkill |
 | SPA-shell sites | ⚠️ partial via `exec_scripts` | ❌ | ✅ |
 | Bot-walled (with cookie handoff) | ✅ | ❌ | ✅ |
-| Run in Lambda / Workers / edge | ✅ | ✅ | ❌ Chrome too big |
+| Run in Lambda / Docker / edge containers | ✅ | ✅ | ❌ Chrome too big |
 | Per-page cost at 100K/day | ~free | ~free | $$$ |
 | LLM-shaped output | ✅ BlockMap inline | DIY parse | DIY parse |
 

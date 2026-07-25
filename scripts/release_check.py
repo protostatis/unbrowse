@@ -149,9 +149,6 @@ def main() -> int:
         raise SystemExit(f"server.json is invalid JSON: {exc}") from exc
     validate_registry_manifest(registry_manifest, version)
 
-    docker_versions = pinned_pyunbrowser_versions("Dockerfile")
-    require(docker_versions == [version], f"Dockerfile pyunbrowser pin {docker_versions!r} != {version}")
-
     distribution_versions = pinned_pyunbrowser_versions("docs/distribution.md")
     require(
         version in distribution_versions,

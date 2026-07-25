@@ -23,15 +23,33 @@ jobs:
   preflight:
     name: Release preflight
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      is_latest: ${{ steps.version.outputs.is_latest }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.tag || github.ref_name }}
+          fetch-depth: 0   # full history so we can find the highest semver tag
 
       - name: Verify tag and package versions
         env:
           RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: python3 scripts/release_check.py --tag "$RELEASE_TAG"
+
+      - name: Compute version and latest status
+        id: version
+        run: |
+          RELEASE_TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          VERSION="${RELEASE_TAG#v}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          LATEST=$(git tag --sort=-version:refname --list 'v*' | head -1)
+          if [ "${LATEST}" = "${RELEASE_TAG}" ]; then
+            echo "is_latest=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_latest=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "version=${VERSION}  is_latest: ${LATEST} = ${RELEASE_TAG}"
 
   build:
     name: Build ${{ matrix.target }}
@@ -560,3 +578,183 @@ jobs:
             ## What's new
 
             See auto-generated changelog below.
+
+  # -------------------------------------------------------------------
+  # GHCR Docker image — multi-arch (linux/amd64, linux/arm64).
+  # Packages the prebuilt Linux binaries (produced natively in the build
+  # jobs above) into a distroless/cc-debian12 image.  No QEMU, no Cargo,
+  # no BoringSSL compile — just COPY + push.
+  # -------------------------------------------------------------------
+  publish-ghcr:
+    name: Publish GHCR image
+    needs: [preflight, build, build-x86_64-unknown-linux-gnu]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write     # required to push to GHCR
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
+
+      - name: Download prebuilt Linux binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: unbrowser-*-linux-gnu
+          path: artifacts/
+
+      - name: Arrange binaries for Docker
+        run: |
+          set -eu
+          mkdir -p bin/amd64 bin/arm64
+          # x86_64 -> amd64
+          tar -xzf artifacts/unbrowser-x86_64-unknown-linux-gnu/unbrowser-x86_64-unknown-linux-gnu.tar.gz -C bin/amd64/
+          test -f bin/amd64/unbrowser || { echo "missing bin/amd64/unbrowser"; exit 1; }
+          # aarch64 -> arm64
+          tar -xzf artifacts/unbrowser-aarch64-unknown-linux-gnu/unbrowser-aarch64-unknown-linux-gnu.tar.gz -C bin/arm64/
+          test -f bin/arm64/unbrowser || { echo "missing bin/arm64/unbrowser"; exit 1; }
+          # Verify ELF architecture
+          echo "--- architecture verification ---"
+          file bin/amd64/unbrowser
+          file bin/arm64/unbrowser
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Build the amd64 image only, loaded locally, so we can smoke-test it
+      # on the native ubuntu-latest runner before publishing.
+      - name: Build amd64 image (smoke test)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.release
+          platforms: linux/amd64
+          load: true
+          tags: unbrowser:release-smoke
+
+      - name: Smoke — MCP initialize + tools/list
+        run: |
+          printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci-smoke","version":"0"}}}\n' | \
+            docker run --rm -i unbrowser:release-smoke 2>/dev/null > /tmp/mcp_init.json
+          python3 -c "
+          import json
+          d = json.load(open('/tmp/mcp_init.json'))
+          si = d.get('result',{}).get('serverInfo',{})
+          assert si.get('name') == 'unbrowser', f'serverInfo: {si}'
+          assert si.get('version'), 'no version in serverInfo'
+          print('MCP init  OK: name={} version={}'.format(si['name'], si['version']))
+          "
+
+      - name: Smoke — navigate example.com (runtime test)
+        run: |
+          for i in 1 2 3; do
+            docker run --rm unbrowser:release-smoke navigate https://example.com --json > /tmp/nav.json 2>/dev/null && break
+            echo "  retry $i/3..."
+            sleep 2
+          done
+          python3 -c "
+          import json
+          d = json.load(open('/tmp/nav.json'))
+          assert d.get('status') == 200, f'status={d.get(\"status\")}'
+          assert d.get('blockmap',{}).get('title'), 'no blockmap title'
+          assert not d.get('challenge'), f'challenge={d.get(\"challenge\")}'
+          print('runtime   OK: status=200 title={!r} bytes={}'.format(
+              d['blockmap']['title'], d.get('bytes')))
+          "
+
+      - name: Smoke — nonroot user
+        run: |
+          USER=$(docker image inspect unbrowser:release-smoke --format '{{.Config.User}}')
+          test "${USER}" = "65532:65532" && echo "user OK: ${USER}" || \
+            { echo "expected 65532:65532, got ${USER}"; exit 1; }
+
+      - name: Compute OCI labels and tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/protostatis/unbrowser
+          tags: |
+            type=raw,value=v${{ needs.preflight.outputs.version }}
+            type=raw,value=${{ needs.preflight.outputs.version }}
+
+      - name: GHCR login
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push multi-platform to GHCR
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.release
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Inspect published manifest
+        run: |
+          echo "### GHCR image published :package:" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          docker buildx imagetools inspect "ghcr.io/protostatis/unbrowser:${{ needs.preflight.outputs.version }}" --raw 2>&1 | \
+            tee /tmp/manifest.json
+          python3 -c "
+          import json
+          d = json.load(open('/tmp/manifest.json'))
+          ms = d.get('manifests', [d])
+          for m in ms:
+              p = m.get('platform',{})
+              print(f'  {p.get(\"os\",\"?\")}/{p.get(\"architecture\",\"?\")}  digest={m.get(\"digest\",\"?\")[:19]}...')
+          " | tee >> "$GITHUB_STEP_SUMMARY"
+
+  # -------------------------------------------------------------------
+  # :latest tag promotion — serialized so an older release can never
+  # overwrite a newer one.  Re-checks git tags right before the
+  # imagetools create so a stale preflight decision is harmless.
+  # -------------------------------------------------------------------
+  promote-latest:
+    name: Promote :latest on GHCR
+    needs: [preflight, publish-ghcr]
+    runs-on: ubuntu-latest
+    if: |
+      always() &&
+      needs.publish-ghcr.result == 'success'
+    permissions:
+      packages: write
+    concurrency:
+      group: ghcr-latest
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0      # all tags so we can find the true highest
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: GHCR login
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Re-check and promote
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          CURRENT="${TAG#v}"
+          HIGHEST_TAG=$(git tag --sort=-version:refname --list 'v*' | head -1)
+          HIGHEST="${HIGHEST_TAG#v}"
+
+          if [ "${HIGHEST}" != "${CURRENT}" ]; then
+            echo "Not the highest semver tag: ${HIGHEST} > ${CURRENT}"
+            echo "Skipping :latest promotion."
+            exit 0
+          fi
+
+          echo " ${CURRENT} is the highest tag — promoting :latest"
+          docker buildx imagetools create \
+            "ghcr.io/protostatis/unbrowser:${CURRENT}" \
+            --tag "ghcr.io/protostatis/unbrowser:latest"

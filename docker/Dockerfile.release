@@ -1,0 +1,54 @@
+# syntax=docker/dockerfile:1.7
+#
+# Release-packaging Dockerfile — used by CI (.github/workflows/release.yml).
+# Expects prebuilt native binaries in a temporary context:
+#
+#   docker/
+#     Dockerfile.release   (this file)
+#   bin/
+#     amd64/unbrowser      (x86_64-unknown-linux-gnu from CI artifact)
+#     arm64/unbrowser      (aarch64-unknown-linux-gnu from CI artifact)
+#
+# BuildKit sets TARGETARCH to amd64 or arm64, selects the matching distroless
+# base manifest, and COPYs the corresponding binary.  No Cargo, no BoringSSL,
+# no QEMU — the artifacts were already compiled natively in earlier CI jobs.
+#
+# Build and push (CI does multi-platform in one call):
+#   docker buildx build --platform linux/amd64,linux/arm64 \
+#     -f docker/Dockerfile.release \
+#     -t ghcr.io/protostatis/unbrowser:v0.0.17 .
+#
+# ---------------------------------------------------------------------------
+# The root `Dockerfile` is for local/dev self-compiling builds.
+# ---------------------------------------------------------------------------
+
+FROM gcr.io/distroless/cc-debian12:nonroot
+
+ARG TARGETARCH
+
+# Prebuilt binary for this arch (amd64 or arm64), placed by CI before build.
+COPY --chmod=0555 bin/${TARGETARCH}/unbrowser /usr/local/bin/unbrowser
+
+# OCI labels — version, revision, and creation-time are injected at build time
+# by docker/metadata-action in CI.  The org.opencontainers standard fields
+# (source, licenses, title, description) are set here once and carried forward.
+LABEL org.opencontainers.image.source="https://github.com/protostatis/unbrowser" \
+      org.opencontainers.image.licenses="Apache-2.0" \
+      org.opencontainers.image.title="unbrowser" \
+      org.opencontainers.image.description="Stateful, non-visual web runtime for LLM agents. HTTP fetch, cookies, forms, clicks, compact BlockMap output, and optional bounded QuickJS page-script execution. Distroless; MCP over stdio by default. No rendering or V8; not a Chrome replacement." \
+      org.opencontainers.image.documentation="https://github.com/protostatis/unbrowser#readme" \
+      org.opencontainers.image.base.name="gcr.io/distroless/cc-debian12:nonroot"
+
+# distroless/cc includes glibc + libgcc + libstdc++ (BoringSSL is C++).
+# UID 65532 is the distroless nonroot default.
+USER 65532:65532
+
+# Bytecode cache: by default the runtime writes to ~/.unbrowser/bytecode (up to
+# 500 MB).  Set UNBROWSER_NO_BYTECODE_CACHE=1 in read-only / long-running
+# containers, or mount a persistent volume at ~/.unbrowser.
+ENV UNBROWSER_NO_BYTECODE_CACHE=1
+
+# `docker run img`             -> unbrowser --mcp   (default: MCP over stdio)
+# `docker run img navigate …`  -> unbrowser navigate …   (args replace --mcp)
+ENTRYPOINT ["unbrowser"]
+CMD ["--mcp"]
