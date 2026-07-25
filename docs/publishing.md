@@ -7,6 +7,7 @@ It is intentionally separate from `skills/unbrowser/SKILL.md`, which is user-fac
 
 - GitHub Release: automated in `.github/workflows/release.yml`
 - PyPI (`pyunbrowser`): automated in `.github/workflows/release.yml`
+- GHCR Docker image (`ghcr.io/protostatis/unbrowser`): automated in `.github/workflows/release.yml`
 - crates.io (`unbrowser` crate): manual `cargo publish`
 - Homebrew tap: manual update of `protostatis/homebrew-tap`
 - ClawHub skill: manual `clawhub publish ...`
@@ -70,12 +71,11 @@ the local install path.
 
 1. Confirm the new PyPI release has Linux wheels:
    `https://pypi.org/pypi/pyunbrowser/X.Y.Z/json`.
-2. Update the root `Dockerfile` pin to `pyunbrowser==X.Y.Z`.
-3. Update `docs/distribution.md` Glama build settings and smoke result.
-4. Run `python3 scripts/release_check.py --tag vX.Y.Z`.
-5. In Glama admin, update the Dockerfile build step:
+2. Update `docs/distribution.md` Glama build settings and smoke result.
+3. Run `python3 scripts/release_check.py --tag vX.Y.Z`.
+4. In Glama admin, update the Dockerfile build step:
    `uv venv /opt/unbrowser --python 3.14 && VIRTUAL_ENV=/opt/unbrowser uv pip install pyunbrowser==X.Y.Z`.
-6. Click **Build & Release** and wait for a successful test.
-7. Verify instance logs show `serverInfo.version = "X.Y.Z"` and
+5. Click **Build & Release** and wait for a successful test.
+6. Verify instance logs show `serverInfo.version = "X.Y.Z"` and
    `tools/list` returns the expected tools.
-8. Run the hosted smoke checklist in `docs/distribution.md`.
+7. Run the hosted smoke checklist in `docs/distribution.md`.

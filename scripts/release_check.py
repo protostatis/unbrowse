@@ -74,9 +74,6 @@ def main() -> int:
     require(len(set(versions.values())) == 1, "version mismatch: " + repr(versions))
     version = cargo
 
-    docker_versions = pinned_pyunbrowser_versions("Dockerfile")
-    require(docker_versions == [version], f"Dockerfile pyunbrowser pin {docker_versions!r} != {version}")
-
     distribution_versions = pinned_pyunbrowser_versions("docs/distribution.md")
     require(
         version in distribution_versions,
