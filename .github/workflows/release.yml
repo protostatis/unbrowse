@@ -596,23 +596,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.tag || github.ref_name }}
-          fetch-depth: 0   # full history so we can re-verify latest tag
-
-      # Re-verify is_latest right before push.  The preflight computation
-      # can be stale if several tags were pushed during the long build
-      # (each workflow's preflight clones tags at start time).  Checking
-      # here guarantees only the true highest-version run tags :latest.
-      - name: Re-verify latest tag
-        id: latest
-        run: |
-          CURRENT="${{ github.ref_name }}"
-          HIGHEST=$(git tag --sort=-version:refname --list 'v*' | head -1)
-          if [ "${HIGHEST}" = "${CURRENT}" ]; then
-            echo "is_equal=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "is_equal=false" >> "$GITHUB_OUTPUT"
-          fi
-          echo "current=${CURRENT}  highest=${HIGHEST}"
 
       - name: Download prebuilt Linux binaries
         uses: actions/download-artifact@v4
@@ -693,7 +676,6 @@ jobs:
           tags: |
             type=raw,value=v${{ needs.preflight.outputs.version }}
             type=raw,value=${{ needs.preflight.outputs.version }}
-            type=raw,value=latest,enable=${{ steps.latest.outputs.is_equal }}
 
       - name: GHCR login
         uses: docker/login-action@v3
@@ -726,3 +708,53 @@ jobs:
               p = m.get('platform',{})
               print(f'  {p.get(\"os\",\"?\")}/{p.get(\"architecture\",\"?\")}  digest={m.get(\"digest\",\"?\")[:19]}...')
           " | tee >> "$GITHUB_STEP_SUMMARY"
+
+  # -------------------------------------------------------------------
+  # :latest tag promotion — serialized so an older release can never
+  # overwrite a newer one.  Re-checks git tags right before the
+  # imagetools create so a stale preflight decision is harmless.
+  # -------------------------------------------------------------------
+  promote-latest:
+    name: Promote :latest on GHCR
+    needs: [preflight, publish-ghcr]
+    runs-on: ubuntu-latest
+    if: |
+      always() &&
+      needs.publish-ghcr.result == 'success'
+    permissions:
+      packages: write
+    concurrency:
+      group: ghcr-latest
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0      # all tags so we can find the true highest
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: GHCR login
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Re-check and promote
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          CURRENT="${TAG#v}"
+          HIGHEST_TAG=$(git tag --sort=-version:refname --list 'v*' | head -1)
+          HIGHEST="${HIGHEST_TAG#v}"
+
+          if [ "${HIGHEST}" != "${CURRENT}" ]; then
+            echo "Not the highest semver tag: ${HIGHEST} > ${CURRENT}"
+            echo "Skipping :latest promotion."
+            exit 0
+          fi
+
+          echo " ${CURRENT} is the highest tag — promoting :latest"
+          docker buildx imagetools create \
+            "ghcr.io/protostatis/unbrowser:${CURRENT}" \
+            --tag "ghcr.io/protostatis/unbrowser:latest"
