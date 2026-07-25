@@ -160,6 +160,7 @@ def main() -> int:
         require(skill_version == version, f"skill version {skill_version!r} != binary version {version!r}")
 
     readme = read("README.md")
+    usage = read("docs/usage.md")
     python_readme = read("python/README.md")
     distribution = read("docs/distribution.md")
     publishing = read("docs/publishing.md")
@@ -193,17 +194,19 @@ def main() -> int:
         "table_to_json",
         "challenge.provider",
     ]:
-        require(needle in readme, f"README missing {needle!r}")
+        require(needle in usage, f"docs/usage.md missing {needle!r}")
         require(needle in skill, f"skill docs missing {needle!r}")
 
     require("unbrowser session start" in pycli, "Python CLI help missing session start")
     require("session prune" in pycli, "Python CLI help missing session prune")
     require("--pretty" in pycli, "Python CLI help missing --pretty")
 
-    session_pos = readme.find("Session CLI")
-    bare_rpc_pos = readme.find("Bare RPC")
-    require(session_pos != -1, "README missing Session CLI section")
-    require(bare_rpc_pos == -1 or session_pos < bare_rpc_pos, "README should present session CLI before bare RPC")
+    require("docs/usage.md" in readme, "README missing usage-reference link")
+    require("docs/compatibility.md" in readme, "README missing compatibility-reference link")
+    session_pos = usage.find("Session CLI")
+    bare_rpc_pos = usage.find("Raw JSON-RPC")
+    require(session_pos != -1, "docs/usage.md missing Session CLI section")
+    require(bare_rpc_pos == -1 or session_pos < bare_rpc_pos, "usage reference should present Session CLI before raw JSON-RPC")
 
     print({"version": version, "skill_version": skill_version, "ok": True})
     return 0
