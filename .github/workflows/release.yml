@@ -19,6 +19,14 @@ on:
 permissions:
   contents: write
 
+# Serialize releases.  If two tags (e.g. v0.0.17 and v0.0.18) are pushed
+# near-simultaneously, their preflight jobs may both clone before the
+# second tag's ref propagates, causing both to decide is_latest=true.
+# Serial ordering guarantees only the true highest version tags :latest.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   preflight:
     name: Release preflight
@@ -523,7 +531,7 @@ jobs:
 
   release:
     name: Create Release
-    needs: [preflight, build, build-x86_64-unknown-linux-gnu]
+    needs: [build, build-x86_64-unknown-linux-gnu]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -578,12 +586,6 @@ jobs:
             ## What's new
 
             See auto-generated changelog below.
-
-            ## Docker
-
-            ```bash
-            docker pull ghcr.io/protostatis/unbrowser:v${{ needs.preflight.outputs.version }}
-            ```
 
   # -------------------------------------------------------------------
   # GHCR Docker image — multi-arch (linux/amd64, linux/arm64).

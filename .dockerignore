@@ -1,4 +1,7 @@
-# Exclude everything by default, whitelist only compile inputs.
+# Exclude everything by default, whitelist only the files that Docker
+# builds need:
+#   - Root Dockerfile: Cargo.toml, Cargo.lock, src/, profiles/, prefit/.
+#   - docker/Dockerfile.release: bin/ (populated by CI with prebuilt binaries).
 # Keeps build context <2 MB (target/ alone is ~4 GB) and stops unrelated
 # file edits from busting the Docker layer cache.
 #
@@ -13,3 +16,5 @@
 !profiles/**
 !prefit
 !prefit/**
+!bin
+!bin/**
