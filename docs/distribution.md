@@ -10,7 +10,7 @@ Breadcrumb name: `unbrowser by Unchained`
 
 ## Submission Status
 
-Updated: 2026-07-05
+Updated: 2026-07-16
 
 Done:
 
@@ -20,17 +20,18 @@ Done:
 - Hosted Unchained MCP endpoint: deployed at `https://unchainedsky.com/unbrowser-mcp` for public discovery and smoke tests.
 - Smithery: published with `Unlisted` off at `https://smithery.ai/servers/protostatis-dev/unbrowser` using the hosted Unchained MCP endpoint; homepage/repository/license/backlink/icon are set.
 - `punkpeye/awesome-mcp-servers`: PR merged at `https://github.com/punkpeye/awesome-mcp-servers/pull/6860`.
-- `ComposioHQ/awesome-claude-skills`: PR opened at `https://github.com/ComposioHQ/awesome-claude-skills/pull/908`; checks passing after switching to a README-only external listing, hosted endpoint follow-up posted, and review still required.
 - crates.io: `unbrowser` v0.0.16 published at `https://crates.io/crates/unbrowser`.
 - Homebrew: `protostatis/homebrew-tap` updated to v0.0.16 at `https://github.com/protostatis/homebrew-tap`.
-- ClawHub: `unbrowser` skill v0.0.16 published at `https://clawhub.com/skills/unbrowser`.
+- ClawHub: `unbrowser` skill v0.0.17 published at `https://clawhub.ai/protostatis/skills/unbrowser`.
 
 Pending or blocked:
 
 - `mcpservers.org`: public listing not yet visible after submissions.
+- `ComposioHQ/awesome-claude-skills`: PR `https://github.com/ComposioHQ/awesome-claude-skills/pull/908` was closed by the owner account on 2026-07-03 without merge; do not reopen it without new owner direction.
 - `appcypher/awesome-mcp-servers`: branch pushed to `https://github.com/protostatis/awesome-mcp-servers/tree/add-unbrowser`; `gh pr create` failed with `CreatePullRequest` permissions. Manual compare URL: `https://github.com/appcypher/awesome-mcp-servers/compare/main...protostatis:add-unbrowser`.
 - Smithery exact namespace: UI created `protostatis-dev/unbrowser`; pursue `protostatis/unbrowser` only if exact namespace ownership matters.
 - Smithery verification: not verified yet. The checklist now passes successful release, homepage, and Smithery backlink; it still fails quality score because the score is exactly 80/100, exact-homepage-host TXT verification, and paid developer plan.
+- Official MCP Registry: package-only v0.0.17 metadata, ownership markers, and release pins are prepared in the repository, but nothing has been submitted. Publishing remains an explicit owner gate after both v0.0.17 packages exist publicly.
 
 One-liner:
 
@@ -115,7 +116,7 @@ Description: use the short description above.
 
 Status: public listing claimed and author-verified. Latest Glama release `v0.1.1` published from commit `eff1674a7bd7ee466aedc1a50eda038f8eb2c908`; build test `019e60f6-34e2-7c51-a26f-eb5d63d26ac4` succeeded and initialized `unbrowser` `0.0.14` through `mcp-proxy`.
 
-Glama build settings:
+Prepared Glama build settings for the next package release (not deployed):
 
 ```json
 {
@@ -123,7 +124,7 @@ Glama build settings:
   "pythonVersion": "3.14",
   "nodeVersion": "26",
   "buildSteps": [
-    "uv venv /opt/unbrowser --python 3.14 && VIRTUAL_ENV=/opt/unbrowser uv pip install pyunbrowser==0.0.16"
+    "uv venv /opt/unbrowser --python 3.14 && VIRTUAL_ENV=/opt/unbrowser uv pip install pyunbrowser==0.0.17"
   ],
   "cmdArguments": [
     "/opt/unbrowser/bin/unbrowser",
@@ -149,6 +150,12 @@ Latest hosted smoke result: Glama release `v0.1.2` built on `pyunbrowser==0.0.16
 
 Latest score result: Server Quality A, Server Coherence A, Tool Definition Quality A, Maintenance A, related servers present, and 32 of 32 tools scored.
 
+## v0.0.17 Release Preparation
+
+Status: prepared in source, not published. `Cargo.toml`, `Cargo.lock`, the Python package metadata/module, the root Dockerfile, and `server.json` are aligned at `0.0.17`. The existing ClawHub skill already uses `0.0.17`.
+
+The Dockerfile and Glama build settings now target the next PyPI package. They cannot build successfully until `pyunbrowser==0.0.17` is public. Do not describe GitHub, PyPI, crates.io, Homebrew, Glama, or the Official MCP Registry as released at v0.0.17 until each external publish and its verification have completed.
+
 ## v0.0.16 Release
 
 Released 2026-07-05. Distribution streams:
@@ -157,8 +164,8 @@ Released 2026-07-05. Distribution streams:
 - **PyPI**: `pip install pyunbrowser==0.0.16` — platform wheels bundling native binary
 - **crates.io**: `cargo install unbrowser` — v0.0.16
 - **Homebrew**: `brew install protostatis/tap/unbrowser` — v0.0.16
-- **ClawHub**: skill v0.0.16 published at `https://clawhub.com/skills/unbrowser`
-- **Glama**: Dockerfile pins `pyunbrowser==0.0.16` — Build & Release needs admin UI
+- **ClawHub**: skill v0.0.16 published at `https://clawhub.ai/protostatis/skills/unbrowser`
+- **Glama**: release v0.1.2 used `pyunbrowser==0.0.16`
 - **Smithery**: uses hosted Unchained MCP endpoint (not version-specific)
 
 Changes:
