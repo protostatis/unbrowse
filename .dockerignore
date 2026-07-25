@@ -1,0 +1,15 @@
+# Exclude everything by default, whitelist only compile inputs.
+# Keeps build context <2 MB (target/ alone is ~4 GB) and stops unrelated
+# file edits from busting the Docker layer cache.
+#
+# NOTE: a directory must be re-included before its contents can be, so each
+# whitelisted path lists both the dir and its /** glob.
+*
+!Cargo.toml
+!Cargo.lock
+!src
+!src/**
+!profiles
+!profiles/**
+!prefit
+!prefit/**
