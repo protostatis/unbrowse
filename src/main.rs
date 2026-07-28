@@ -5890,7 +5890,7 @@ struct NavigateCliArgs {
     exec_scripts: bool,
     events: bool,
     include_ascii: bool,
-    pretty: bool,
+    compact: bool,
 }
 
 async fn navigate_cmd(args: &[String], command_i: usize) -> Result<()> {
@@ -5903,10 +5903,10 @@ async fn navigate_cmd(args: &[String], command_i: usize) -> Result<()> {
     let mut session = Session::new(&profile, policy_block, shim_mode)?;
     let result = session.navigate_opts(&cli.url, cli.exec_scripts, cli.include_ascii).await;
     EVENTS_ENABLED.store(previous_events, Ordering::Relaxed);
-    if cli.pretty {
-        println!("{}", serde_json::to_string_pretty(&result?)?);
-    } else {
+    if cli.compact {
         println!("{}", serde_json::to_string(&result?)?);
+    } else {
+        println!("{}", serde_json::to_string_pretty(&result?)?);
     }
     Ok(())
 }
@@ -5916,7 +5916,7 @@ fn parse_navigate_cli_args(args: &[String], command_i: usize) -> Result<Navigate
     let mut exec_scripts = false;
     let mut events = false;
     let mut include_ascii = false;
-    let mut pretty = false;
+    let mut compact = false;
     let mut i = 1;
     while i < args.len() {
         if i == command_i {
@@ -5956,8 +5956,8 @@ fn parse_navigate_cli_args(args: &[String], command_i: usize) -> Result<Navigate
             i += 1;
             continue;
         }
-        if arg == "--pretty" {
-            pretty = true;
+        if arg == "--compact" || arg == "--json" {
+            compact = true;
             i += 1;
             continue;
         }
@@ -5975,7 +5975,7 @@ fn parse_navigate_cli_args(args: &[String], command_i: usize) -> Result<Navigate
         exec_scripts,
         events,
         include_ascii,
-        pretty,
+        compact,
     })
 }
 
