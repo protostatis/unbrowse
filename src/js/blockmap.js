@@ -182,32 +182,42 @@
   }
 
   function summarize(el) {
-    var counts = {
-      links: el.getElementsByTagName('a').length,
-      buttons: el.getElementsByTagName('button').length,
-      inputs: el.querySelectorAll('input, textarea, select').length,
-      headings: el.querySelectorAll('h1, h2, h3, h4, h5, h6').length,
-      lists: el.getElementsByTagName('ul').length + el.getElementsByTagName('ol').length,
-      tables: el.getElementsByTagName('table').length,
-      images: el.getElementsByTagName('img').length,
-    };
-    var parts = [];
-    if (counts.headings) parts.push(counts.headings + ' headings');
-    if (counts.links) parts.push(counts.links + ' links');
-    if (counts.buttons) parts.push(counts.buttons + ' buttons');
-    if (counts.inputs) parts.push(counts.inputs + ' inputs');
-    if (counts.tables) parts.push(counts.tables + ' tables');
-    if (counts.lists) parts.push(counts.lists + ' lists');
-    if (counts.images) parts.push(counts.images + ' images');
-    var firstHeading = '';
-    var fh = el.querySelectorAll('h1, h2, h3')[0];
-    if (fh) firstHeading = clean(fh.textContent).slice(0, 60);
+    // Build counts object with only non-zero fields.
+    // Downstream Rust consumers read with `.get().unwrap_or(0)`,
+    // so missing = zero is safe.
+    var _links = el.getElementsByTagName('a').length;
+    var _buttons = el.getElementsByTagName('button').length;
+    var _inputs = el.querySelectorAll('input, textarea, select').length;
+    var _headings = el.querySelectorAll('h1, h2, h3, h4, h5, h6').length;
+    var _lists = el.getElementsByTagName('ul').length + el.getElementsByTagName('ol').length;
+    var _tables = el.getElementsByTagName('table').length;
+    var _images = el.getElementsByTagName('img').length;
+    var counts = {};
+    if (_links) counts.links = _links;
+    if (_buttons) counts.buttons = _buttons;
+    if (_inputs) counts.inputs = _inputs;
+    if (_headings) counts.headings = _headings;
+    if (_tables) counts.tables = _tables;
+    if (_lists) counts.lists = _lists;
+    if (_images) counts.images = _images;
+    // summary kept for ASCII rendering but not included in JSON output
+    var _parts = [];
+    if (counts.headings) _parts.push(counts.headings + ' headings');
+    if (counts.links) _parts.push(counts.links + ' links');
+    if (counts.buttons) _parts.push(counts.buttons + ' buttons');
+    if (counts.inputs) _parts.push(counts.inputs + ' inputs');
+    if (counts.tables) _parts.push(counts.tables + ' tables');
+    if (counts.lists) _parts.push(counts.lists + ' lists');
+    if (counts.images) _parts.push(counts.images + ' images');
+    var _fh = el.querySelectorAll('h1, h2, h3')[0];
+    var _firstH = _fh ? clean(_fh.textContent).slice(0, 60) : '';
+    var _summary = (_firstH ? '"' + _firstH + '" — ' : '') + (_parts.join(', ') || 'empty');
     return {
       role: el.getAttribute('role') || el.tagName.toLowerCase(),
       ref: 'e:' + el._id,
       ident: shortIdent(el),
       counts: counts,
-      summary: (firstHeading ? '"' + firstHeading + '" — ' : '') + (parts.join(', ') || 'empty'),
+      _summary: _summary,  // internal only, stripped before return
     };
   }
 
@@ -232,11 +242,10 @@
       };
     }
 
-    // Headings — keep up to 20. Also surface a `main_headings` list that
-    // excludes anything inside <header>/<nav>/<footer>/<aside>, because on
-    // sites like GitHub the global headings list is dominated by site chrome
-    // ("Navigation Menu", "Search code...", etc.) instead of the actual
-    // page topic.
+    // Headings — v2: single list with chrome flag. Previously had separate
+    // `main_headings` which duplicated data. Scan ALL headings first for
+    // accurate counts, then emit up to 20, prioritizing content headings
+    // over chrome.
     function inChromeAncestor(el) {
       var n = el.parentNode;
       while (n && n.tagName) {
@@ -246,18 +255,26 @@
       }
       return false;
     }
-    var headings = [];
-    var mainHeadings = [];
-    var hs = body.querySelectorAll('h1, h2, h3, h4, h5, h6');
-    for (var i = 0; i < hs.length && i < 20; i++) {
-      var entry = {
-        level: parseInt(hs[i].tagName[1], 10),
-        text: clean(hs[i].textContent).slice(0, 80),
-        ref: 'e:' + hs[i]._id,
-      };
-      headings.push(entry);
-      if (!inChromeAncestor(hs[i])) mainHeadings.push(entry);
+    var _allHeadings = [];
+    var _hs = body.querySelectorAll('h1, h2, h3, h4, h5, h6');
+    for (var _hi = 0; _hi < _hs.length; _hi++) {
+      _allHeadings.push({
+        level: parseInt(_hs[_hi].tagName[1], 10),
+        text: clean(_hs[_hi].textContent).slice(0, 80),
+        ref: 'e:' + _hs[_hi]._id,
+        chrome: inChromeAncestor(_hs[_hi]),
+      });
     }
+    // Sort: content headings first, chrome headings after. Then take top 20.
+    _allHeadings.sort(function(a, b) { return (a.chrome ? 1 : 0) - (b.chrome ? 1 : 0); });
+    var headings = _allHeadings.slice(0, 20);
+    // Re-sort by original document order for the agent's readability
+    var _refOrder = {};
+    for (var _ri = 0; _ri < _hs.length; _ri++) { _refOrder['e:' + _hs[_ri]._id] = _ri; }
+    headings.sort(function(a, b) { return (_refOrder[a.ref] || 0) - (_refOrder[b.ref] || 0); });
+    // Track counts for downstream consumers (tool likelihood uses main_headings.length)
+    var mainHeadingCount = 0;
+    for (var _hi2 = 0; _hi2 < headings.length; _hi2++) { if (!headings[_hi2].chrome) mainHeadingCount++; }
 
     // Interactives
     var links = body.getElementsByTagName('a');
@@ -276,6 +293,18 @@
       });
     }
 
+    // Helper: strip null fields from an output object to save chars.
+    // score is used for ranking but not serialized.
+    function _sparse(o, keep) {
+      var out = {};
+      for (var _k in o) {
+        if (_k === 'score') continue;  // ranking-only, never serialize
+        if (keep && keep.indexOf(_k) === -1) continue;
+        if (o[_k] != null) out[_k] = o[_k];
+      }
+      return out;
+    }
+
     var linkSamples = [];
     for (var li = 0; li < links.length; li++) {
       var link = links[li];
@@ -291,7 +320,11 @@
       });
     }
     linkSamples.sort(function(a, b) { return b.score - a.score; });
-    linkSamples = linkSamples.slice(0, 50);
+    // v2: cap at 24 and sparsify (drop null fields, drop score)
+    linkSamples = linkSamples.slice(0, 24);
+    for (var _lsi = 0; _lsi < linkSamples.length; _lsi++) {
+      linkSamples[_lsi] = _sparse(linkSamples[_lsi]);
+    }
 
     var buttonEls = [];
     for (var bi = 0; bi < buttons.length; bi++) buttonEls.push(buttons[bi]);
@@ -312,7 +345,27 @@
       });
     }
     buttonSamples.sort(function(a, b) { return b.score - a.score; });
-    buttonSamples = buttonSamples.slice(0, 50);
+    // v2: cap at 12, group repeated labels, sparsify
+    buttonSamples = buttonSamples.slice(0, 25);  // oversample for grouping
+    var _btnGroups = {};
+    var _btnOrder = [];
+    for (var _bsi = 0; _bsi < buttonSamples.length; _bsi++) {
+      var _btn = buttonSamples[_bsi];
+      var _bkey = _btn.text + '|' + (_btn.type || '');
+      if (!_btnGroups[_bkey]) {
+        _btnGroups[_bkey] = { entry: _btn, count: 1 };
+        _btnOrder.push(_bkey);
+      } else {
+        _btnGroups[_bkey].count++;
+      }
+    }
+    buttonSamples = [];
+    for (var _boi = 0; _boi < _btnOrder.length && buttonSamples.length < 12; _boi++) {
+      var _g = _btnGroups[_btnOrder[_boi]];
+      var _sEntry = _sparse(_g.entry);
+      if (_g.count > 1) _sEntry.matches = _g.count;
+      buttonSamples.push(_sEntry);
+    }
 
     var formEls = body.getElementsByTagName('form');
     var forms = [];
@@ -396,6 +449,33 @@
       }
     }
 
+    // RLE grouping: collapse repeated shapes (same role + ident + counts) to
+    // keep up to 3 examples + a repeat count. Saves ~5KB on card-grid pages.
+    var _shapeFreq = {};
+    for (var _si = 0; _si < structure.length; _si++) {
+      var _sk = structure[_si].role + '|' + structure[_si].ident + '|' + JSON.stringify(structure[_si].counts);
+      _shapeFreq[_sk] = (_shapeFreq[_sk] || 0) + 1;
+    }
+    var _shapeSeen = {};
+    var _compactStructure = [];
+    for (var _si2 = 0; _si2 < structure.length; _si2++) {
+      var _block = structure[_si2];
+      var _sk2 = _block.role + '|' + _block.ident + '|' + JSON.stringify(_block.counts);
+      var _n = (_shapeSeen[_sk2] || 0) + 1;
+      _shapeSeen[_sk2] = _n;
+      if (_n <= 3 || _shapeFreq[_sk2] <= 3) {
+        // Emit up to 3 examples of each shape
+        _compactStructure.push(_block);
+      }
+      // On the 3rd emit (or last if fewer than 3 total examples), tag with repeat
+      if (_n === Math.min(3, _shapeFreq[_sk2])) {
+        if (_shapeFreq[_sk2] > 3) {
+          _block.repeat = _shapeFreq[_sk2];
+        }
+      }
+    }
+    structure = _compactStructure;
+
     // ASCII outline
     var ascii = [];
     var bar = '  ' + divider(64);
@@ -407,7 +487,8 @@
       for (var s = 0; s < structure.length; s++) {
         var b = structure[s];
         var role = (b.role.toUpperCase() + '          ').slice(0, 9);
-        ascii.push('  ' + role + ' [' + b.ref + '] ' + b.ident + ' — ' + b.summary);
+        var _rep = b.repeat ? ' ×' + b.repeat : '';
+        ascii.push('  ' + role + ' [' + b.ref + '] ' + b.ident + _rep + ' — ' + b._summary);
       }
     }
     ascii.push(bar);
@@ -470,7 +551,7 @@
     var scriptHeavyShell =
       allScripts.length >= 20 &&
       structure.length <= 1 &&
-      mainHeadings.length === 0 &&
+      mainHeadingCount === 0 &&
       links.length < 20 &&
       bodyBytes < 6000;
 
@@ -519,10 +600,10 @@
     }
 
     return {
+      blockmap_version: 2,
       title: document.title || '',
       structure: structure,
       headings: headings,
-      main_headings: mainHeadings,
       selectors: selectors,
       interactives: {
         links: links.length,
