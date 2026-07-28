@@ -85,7 +85,7 @@ def validate_registry_manifest(manifest: object, version: str) -> None:
         "websiteUrl": (
             "https://unchainedsky.com/unbrowser?ref=official_mcp_registry"
             "&utm_source=official_mcp_registry&utm_medium=mcp_directory"
-            "&utm_campaign=unbrowser_registry_v0017_launch"
+            "&utm_campaign=unbrowser_registry_v0018_launch"
         ),
     }
     for field, expected in expected_metadata.items():
