@@ -1000,7 +1000,18 @@ impl Session {
     }
 
     async fn navigate(&mut self, url: &str, exec_scripts: bool) -> Result<Value> {
-        self.navigate_with(self.http.get(url), exec_scripts).await
+        self.navigate_with(self.http.get(url), exec_scripts, false).await
+    }
+
+    /// Navigate with optional ascii blockmap for human debugging.
+    async fn navigate_opts(
+        &mut self,
+        url: &str,
+        exec_scripts: bool,
+        include_ascii: bool,
+    ) -> Result<Value> {
+        self.navigate_with(self.http.get(url), exec_scripts, include_ascii)
+            .await
     }
 
     // Shared pipeline: take an already-built wreq::RequestBuilder (GET from
@@ -1012,6 +1023,7 @@ impl Session {
         &mut self,
         req: wreq::RequestBuilder,
         exec_scripts: bool,
+        include_ascii: bool,
     ) -> Result<Value> {
         let nav_start = std::time::Instant::now();
         let nav_id = self.next_nav_id();
@@ -1028,9 +1040,8 @@ impl Session {
         // Multi-value headers (Set-Cookie) are joined with ' || ' since they're
         // mostly diagnostic — the actual cookie storage already happened in
         // wreq's CookieStore impl.
+        // Full header map for internal use (network_store, challenge detection).
         let mut headers: serde_json::Map<String, Value> = serde_json::Map::new();
-        // Parallel HashMap for network_store::maybe_capture (it needs a
-        // HashMap<String, String>, not the serde_json::Map shape we return).
         let mut headers_flat: HashMap<String, String> = HashMap::new();
         for (name, value) in resp.headers() {
             let key = name.as_str().to_lowercase();
@@ -1043,10 +1054,18 @@ impl Session {
                     headers.insert(key.clone(), Value::String(v.clone()));
                 }
             }
-            // For the network store: keep one value per name (last wins);
-            // the only multi-value header that matters here is Set-Cookie
-            // and it's not used for content-type classification.
             headers_flat.insert(key, v);
+        }
+
+        // Filtered headers for the agent-facing response: keep only the fields
+        // an LLM agent can actually act on. Full headers are ~1-8K tokens of
+        // CSP policies, preload hints, CDN metadata, ad-tech domains — noise
+        // that inflates every navigate response with zero agent utility.
+        let mut response_headers: serde_json::Map<String, Value> = serde_json::Map::new();
+        for key in ["content-type", "location"] {
+            if let Some(v) = headers.get(key) {
+                response_headers.insert((*key).to_string(), v.clone());
+            }
         }
 
         let body = resp.text().await.context("read body")?;
@@ -1727,6 +1746,16 @@ impl Session {
 
         let mut blockmap = self.blockmap().unwrap_or(Value::Null);
         apply_status_to_blockmap(&mut blockmap, status);
+
+        // Strip the human-readable ASCII grid by default — it's redundant
+        // with the JSON structure/headings/density fields and costs
+        // ~500-8000 chars per page with zero agent utility.
+        if !include_ascii {
+            if let Some(obj) = blockmap.as_object_mut() {
+                obj.remove("ascii");
+            }
+        }
+
         let browser_route = challenge::detect_browser_route(status, &body, &blockmap);
         self.last_challenge = challenge.clone();
         self.last_rate_limit = rate_limit.clone();
@@ -1753,14 +1782,16 @@ impl Session {
         // back through serde_json runs ~20–150ms — bounded by the inline-size
         // cap below so a runaway result can't bloat the navigate response.
         //
-        // Inline cap rationale: navigate's response is one JSON-RPC line on
-        // stdout. Multi-MB lines choke MCP hosts and naïve readline
-        // consumers. 256 KB comfortably fits a large __NEXT_DATA__ (Zillow
-        // ~160 KB) but caps pathological Magento PLPs (sometimes 500 KB+ of
-        // init blobs). On overflow we return a stub carrying strategy /
-        // confidence / size so the agent knows what's there and can call
-        // extract() explicitly to retrieve the full payload.
-        const MAX_INLINE_EXTRACT_BYTES: usize = 256 * 1024;
+        // Inline cap rationale: navigate's response is a single JSON-RPC
+        // message the agent must consume as context. 256 KB of Next.js page
+        // props (~64K tokens) dominates the response on SPA sites, most of
+        // which is infrastructure (analytics, navigation, feature flags)
+        // rather than actual page content. 16 KB (~4K tokens) provides a
+        // compact preview — the agent gets enough to decide whether to call
+        // extract() for the full payload. On overflow we return a stub
+        // carrying strategy / confidence / size / all_hits_summary so the
+        // agent knows what's available.
+        const MAX_INLINE_EXTRACT_BYTES: usize = 16 * 1024;
 
         let json_scripts = blockmap
             .get("density")
@@ -1779,7 +1810,11 @@ impl Session {
                         // ~750KB; json_ld (20KB, conf 0.95) fits and carries
                         // the markets list. Agent can call extract() for the
                         // full primary if they want.
-                        let primary_strategy = v.get("strategy").cloned().unwrap_or(Value::Null);
+                        let primary_strategy = v
+                            .get("strategy")
+                            .and_then(|s| s.as_str())
+                            .unwrap_or("unknown")
+                            .to_string();
                         let primary_confidence =
                             v.get("confidence").cloned().unwrap_or(Value::Null);
                         let mut chosen: Option<Value> = None;
@@ -1796,10 +1831,10 @@ impl Session {
                                             "strategy": primary_strategy.clone(),
                                             "confidence": primary_confidence.clone(),
                                             "size_bytes": size,
-                                            "hint": format!(
-                                                "primary strategy {strat} ({size} bytes) exceeds {MAX_INLINE_EXTRACT_BYTES} byte inline cap; this fallback is the largest fitting hit. Call extract() for the full primary.",
-                                                strat = primary_strategy
-                                            ),
+                                "hint": format!(
+                                    "primary \"{strat}\" ({size} bytes) exceeds {MAX_INLINE_EXTRACT_BYTES} byte inline cap; showing best fitting fallback. Call extract(strategy=\"{strat}\") for the full primary.",
+                                    strat = primary_strategy
+                                ),
                                         },
                                     });
                                     // Carry truncated all_hits summary for visibility.
@@ -1957,7 +1992,7 @@ impl Session {
             "status": status,
             "url": final_url,
             "bytes": bytes,
-            "headers": Value::Object(headers),
+            "headers": Value::Object(response_headers),
             "shim_mode": self.shim_mode.as_str(),
             "blockmap": blockmap,
             "challenge": challenge,
@@ -3309,7 +3344,7 @@ impl Session {
                     .post(&target_url)
                     .header("content-type", "application/x-www-form-urlencoded")
                     .body(body);
-                self.navigate_with(req, false).await
+                self.navigate_with(req, false, false).await
             }
             other => Err(anyhow!("unsupported form method '{other}'")),
         }
@@ -5232,10 +5267,15 @@ fn derive_tool_likelihoods(
         .and_then(|v| v.as_array())
         .map(|a| a.len() as u64)
         .unwrap_or(0);
+    // v2: main_headings was removed; derive from headings where chrome=false
     let main_headings = blockmap
-        .get("main_headings")
+        .get("headings")
         .and_then(|v| v.as_array())
-        .map(|a| a.len() as u64)
+        .map(|a| {
+            a.iter()
+                .filter(|h| !h.get("chrome").and_then(|c| c.as_bool()).unwrap_or(false))
+                .count() as u64
+        })
         .unwrap_or(0);
 
     let interactives = blockmap.get("interactives").unwrap_or(&Value::Null);
@@ -5849,6 +5889,8 @@ struct NavigateCliArgs {
     url: String,
     exec_scripts: bool,
     events: bool,
+    include_ascii: bool,
+    pretty: bool,
 }
 
 async fn navigate_cmd(args: &[String], command_i: usize) -> Result<()> {
@@ -5859,9 +5901,13 @@ async fn navigate_cmd(args: &[String], command_i: usize) -> Result<()> {
     let shim_mode = parse_shim_mode_arg(args)?;
     let previous_events = EVENTS_ENABLED.swap(cli.events, Ordering::Relaxed);
     let mut session = Session::new(&profile, policy_block, shim_mode)?;
-    let result = session.navigate(&cli.url, cli.exec_scripts).await;
+    let result = session.navigate_opts(&cli.url, cli.exec_scripts, cli.include_ascii).await;
     EVENTS_ENABLED.store(previous_events, Ordering::Relaxed);
-    println!("{}", serde_json::to_string(&result?)?);
+    if cli.pretty {
+        println!("{}", serde_json::to_string_pretty(&result?)?);
+    } else {
+        println!("{}", serde_json::to_string(&result?)?);
+    }
     Ok(())
 }
 
@@ -5869,6 +5915,8 @@ fn parse_navigate_cli_args(args: &[String], command_i: usize) -> Result<Navigate
     let mut url = None;
     let mut exec_scripts = false;
     let mut events = false;
+    let mut include_ascii = false;
+    let mut pretty = false;
     let mut i = 1;
     while i < args.len() {
         if i == command_i {
@@ -5903,6 +5951,16 @@ fn parse_navigate_cli_args(args: &[String], command_i: usize) -> Result<Navigate
             i += 1;
             continue;
         }
+        if arg == "--ascii" {
+            include_ascii = true;
+            i += 1;
+            continue;
+        }
+        if arg == "--pretty" {
+            pretty = true;
+            i += 1;
+            continue;
+        }
         if arg.starts_with('-') {
             return Err(anyhow!("unknown navigate option: {arg}"));
         }
@@ -5916,6 +5974,8 @@ fn parse_navigate_cli_args(args: &[String], command_i: usize) -> Result<Navigate
         url,
         exec_scripts,
         events,
+        include_ascii,
+        pretty,
     })
 }
 
@@ -6460,7 +6520,12 @@ async fn rpc_main(profile: Profile) -> Result<()> {
                         .get("exec_scripts")
                         .and_then(|v| v.as_bool())
                         .unwrap_or(false);
-                    match session.navigate(u, exec).await {
+                    let include_ascii = req
+                        .params
+                        .get("include_ascii")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    match session.navigate_opts(u, exec, include_ascii).await {
                         Ok(v) => ok_response(id, v),
                         Err(e) => err_response(id, -2, e.to_string()),
                     }
@@ -6836,7 +6901,8 @@ fn mcp_tools() -> Value {
                 "type": "object",
                 "properties": {
                     "url":          { "type": "string", "description": "Absolute URL to fetch" },
-                    "exec_scripts": { "type": "boolean", "description": "Run page <script> tags (inline + external src) after parse, settle the event loop, and fire DOMContentLoaded + load. Default false." }
+                    "exec_scripts": { "type": "boolean", "description": "Run page <script> tags (inline + external src) after parse, settle the event loop, and fire DOMContentLoaded + load. Default false." },
+                    "include_ascii": { "type": "boolean", "description": "Include human-readable ASCII blockmap grid (redundant with JSON fields). Default false." }
                 },
                 "required": ["url"]
             }
@@ -7175,7 +7241,11 @@ async fn dispatch_tool(session: &mut Session, name: &str, args: &Value) -> Resul
                 .get("exec_scripts")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
-            session.navigate(url, exec).await
+            let include_ascii = args
+                .get("include_ascii")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            session.navigate_opts(url, exec, include_ascii).await
         }
         "query" => {
             let sel = str_arg("selector").ok_or_else(|| anyhow!("missing 'selector'"))?;

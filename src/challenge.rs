@@ -370,10 +370,15 @@ pub fn detect_browser_route(status: u16, body: &str, blockmap: &Value) -> Option
         .and_then(|v| v.as_array())
         .map(|a| a.len())
         .unwrap_or(0);
+    // v2: main_headings was removed; derive from headings where chrome=false
     let main_heading_count = blockmap
-        .get("main_headings")
+        .get("headings")
         .and_then(|v| v.as_array())
-        .map(|a| a.len())
+        .map(|a| {
+            a.iter()
+                .filter(|h| !h.get("chrome").and_then(|c| c.as_bool()).unwrap_or(false))
+                .count()
+        })
         .unwrap_or(0);
     let raw_route_surface = has_raw_route_surface(&lower);
     let script_heavy_has_usable_content =
