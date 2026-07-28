@@ -173,8 +173,8 @@ API additions:
 
 | Field | Shape |
 |---|---|
-| `blockmap.interactives.link_samples[]` | `{ref, text, href, aria_label, title, role, score}` |
-| `blockmap.interactives.button_samples[]` | `{ref, text, type, aria_label, title, role, score}` |
+| `blockmap.interactives.link_samples[]` | `{ref, text, href, aria_label?, title?, role?}` — sparse v2 output, score is internal-only |
+| `blockmap.interactives.button_samples[]` | `{ref, text, type, aria_label?, title?, role?, matches?}` — sparse v2, repeated labels grouped |
 | `forms[].controls[]` | `{ref, tag, type, name, label, placeholder, value, checked, selected, options}` |
 | `forms[].submit_candidates[]` | `{ref, tag, text, type, score, reason}` |
 | `forms[].query_preview` | Resolved GET action plus current serializable field names, with values redacted only for password-like fields. |

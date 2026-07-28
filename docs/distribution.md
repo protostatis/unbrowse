@@ -22,7 +22,7 @@ Done:
 - `punkpeye/awesome-mcp-servers`: PR merged at `https://github.com/punkpeye/awesome-mcp-servers/pull/6860`.
 - crates.io: `unbrowser` v0.0.16 published at `https://crates.io/crates/unbrowser`.
 - Homebrew: `protostatis/homebrew-tap` updated to v0.0.16 at `https://github.com/protostatis/homebrew-tap`.
-- ClawHub: `unbrowser` skill v0.0.18 published at `https://clawhub.ai/protostatis/skills/unbrowser`.
+- ClawHub: `unbrowser` skill v0.0.18 prepared at `https://clawhub.ai/protostatis/skills/unbrowser`.
 
 Pending or blocked:
 

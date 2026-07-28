@@ -16,7 +16,7 @@
 # Build and push (CI does multi-platform in one call):
 #   docker buildx build --platform linux/amd64,linux/arm64 \
 #     -f docker/Dockerfile.release \
-#     -t ghcr.io/protostatis/unbrowser:v0.0.17 .
+#     -t ghcr.io/protostatis/unbrowser:v0.0.18 .
 #
 # ---------------------------------------------------------------------------
 # The root `Dockerfile` is for local/dev self-compiling builds.

@@ -234,6 +234,7 @@
     var body = document.body;
     if (!body) {
       return {
+        blockmap_version: 2,
         title: document.title || '',
         structure: [],
         headings: [],
@@ -272,9 +273,9 @@
     var _refOrder = {};
     for (var _ri = 0; _ri < _hs.length; _ri++) { _refOrder['e:' + _hs[_ri]._id] = _ri; }
     headings.sort(function(a, b) { return (_refOrder[a.ref] || 0) - (_refOrder[b.ref] || 0); });
-    // Track counts for downstream consumers (tool likelihood uses main_headings.length)
+    // Track counts from ALL scanned headings, not just the sampled top-20.
     var mainHeadingCount = 0;
-    for (var _hi2 = 0; _hi2 < headings.length; _hi2++) { if (!headings[_hi2].chrome) mainHeadingCount++; }
+    for (var _hi2 = 0; _hi2 < _allHeadings.length; _hi2++) { if (!_allHeadings[_hi2].chrome) mainHeadingCount++; }
 
     // Interactives
     var links = body.getElementsByTagName('a');
@@ -597,6 +598,12 @@
     }
     if (selectors.data_testid || selectors.aria_label || selectors.role) {
       ascii.push('  SELECTOR HINTS: data-testid=' + selectors.data_testid + ' aria=' + selectors.aria_label + ' role=' + selectors.role);
+    }
+
+    // Strip internal-only fields from structure entries before returning.
+    // _summary is consumed by ASCII above; never leak it to JSON.
+    for (var _stri = 0; _stri < structure.length; _stri++) {
+      delete structure[_stri]._summary;
     }
 
     return {
