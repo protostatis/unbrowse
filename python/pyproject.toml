@@ -10,7 +10,7 @@ build-backend = "hatchling.build"
 # primary binary stay `unbrowser`; `pyunbrowser` is an equivalent compatibility
 # entry point so Registry clients can execute the PyPI identifier with `uvx`.
 name = "pyunbrowser"
-version = "0.0.17"
+version = "0.0.18"
 description = "Web access for LLM agents. One static binary. No Chrome."
 readme = "README.md"
 license = { text = "Apache-2.0" }

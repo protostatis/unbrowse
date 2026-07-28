@@ -5890,7 +5890,7 @@ struct NavigateCliArgs {
     exec_scripts: bool,
     events: bool,
     include_ascii: bool,
-    pretty: bool,
+    compact: bool,
 }
 
 async fn navigate_cmd(args: &[String], command_i: usize) -> Result<()> {
@@ -5903,10 +5903,10 @@ async fn navigate_cmd(args: &[String], command_i: usize) -> Result<()> {
     let mut session = Session::new(&profile, policy_block, shim_mode)?;
     let result = session.navigate_opts(&cli.url, cli.exec_scripts, cli.include_ascii).await;
     EVENTS_ENABLED.store(previous_events, Ordering::Relaxed);
-    if cli.pretty {
-        println!("{}", serde_json::to_string_pretty(&result?)?);
-    } else {
+    if cli.compact {
         println!("{}", serde_json::to_string(&result?)?);
+    } else {
+        println!("{}", serde_json::to_string_pretty(&result?)?);
     }
     Ok(())
 }
@@ -5916,7 +5916,7 @@ fn parse_navigate_cli_args(args: &[String], command_i: usize) -> Result<Navigate
     let mut exec_scripts = false;
     let mut events = false;
     let mut include_ascii = false;
-    let mut pretty = false;
+    let mut compact = false;
     let mut i = 1;
     while i < args.len() {
         if i == command_i {
@@ -5936,7 +5936,6 @@ fn parse_navigate_cli_args(args: &[String], command_i: usize) -> Result<Navigate
             || arg.starts_with("--shims=")
             || arg == "--policy=blocklist"
             || arg == "--policy=on"
-            || arg == "--json"
         {
             i += 1;
             continue;
@@ -5956,8 +5955,8 @@ fn parse_navigate_cli_args(args: &[String], command_i: usize) -> Result<Navigate
             i += 1;
             continue;
         }
-        if arg == "--pretty" {
-            pretty = true;
+        if arg == "--compact" || arg == "--json" {
+            compact = true;
             i += 1;
             continue;
         }
@@ -5975,7 +5974,7 @@ fn parse_navigate_cli_args(args: &[String], command_i: usize) -> Result<Navigate
         exec_scripts,
         events,
         include_ascii,
-        pretty,
+        compact,
     })
 }
 
@@ -6649,7 +6648,11 @@ async fn rpc_main(profile: Profile) -> Result<()> {
                     None => err_response(id, -32602, "missing 'text' param"),
                 }
             }
-            "blockmap" => match session.blockmap() {
+            "blockmap" => match session.blockmap().map(|mut v| {
+                // Strip ASCII on standalone blockmap calls — same as navigate default
+                if let Some(obj) = v.as_object_mut() { obj.remove("ascii"); }
+                v
+            }) {
                 Ok(v) => ok_response(id, v),
                 Err(e) => err_response(id, -6, e.to_string()),
             },
@@ -6896,7 +6899,7 @@ fn mcp_tools() -> Value {
     json!([
         {
             "name": "navigate",
-            "description": "Fetch a URL with Chrome-fingerprinted HTTP using the active profile. Parses HTML, seeds the JS DOM, returns BlockMap inline. With `exec_scripts: true`, extracts inline AND external <script> tags from the parsed HTML, fetches externals in parallel (8s per-fetch timeout), eval's them in document order in QuickJS (with shims for setTimeout/fetch/etc.), then settles the event loop and fires DOMContentLoaded + load. `<script async>` is honored: async scripts execute after the sync queue. When `--policy=blocklist` is set, tracker URLs are blocked at script-fetch time (see scripts.policy_blocked in the result). Returns a `scripts` summary with inline_count, external_count, async_count, policy_blocked, executed, errors.\n\nAuto-extract: when the page embeds JSON-bearing <script> tags (density.json_scripts > 0 — covers application/json, application/ld+json, text/x-magento-init, text/x-shopify-app, etc.), navigate auto-runs `extract()` and returns the result as the `extract` field. Saves a round trip on the common case where the data the JS would have rendered is already sitting in the HTML — JSON-LD article schemas on news sites, __NEXT_DATA__ page state on Next.js apps, json_in_script product blobs on Magento/Shopify, GitHub RSC payloads, etc. Capped at 256 KB inline; over that limit `extract` returns a stub with strategy/confidence/size_bytes/hint and the agent should call `extract()` explicitly to retrieve the full payload. Pages with no embedded JSON get extract:null and pay zero extra cost.\n\nTool advice: navigate also returns `tool_likelihoods` plus `tool_recommendations`, derived from concrete page signals (structure/headings, selector hints, density, embedded data, network captures, challenge state, and script pathology) so agents can pick the next tool without guessing.\n\nAuto-solve: Reddit's JS proof-of-work challenge (provider: reddit_js_challenge) is transparently solved — the challenge is detected, the GET solution URL is computed (solution = hex_value + hex_value), and the real page is returned in one navigate call. challenge:null on the result means the real page was served. Subsequent navigations in the same session carry the clearance cookie and skip the challenge entirely.",
+            "description": "Fetch a URL with Chrome-fingerprinted HTTP using the active profile. Parses HTML, seeds the JS DOM, returns BlockMap inline. With `exec_scripts: true`, extracts inline AND external <script> tags from the parsed HTML, fetches externals in parallel (8s per-fetch timeout), eval's them in document order in QuickJS (with shims for setTimeout/fetch/etc.), then settles the event loop and fires DOMContentLoaded + load. `<script async>` is honored: async scripts execute after the sync queue. When `--policy=blocklist` is set, tracker URLs are blocked at script-fetch time (see scripts.policy_blocked in the result). Returns a `scripts` summary with inline_count, external_count, async_count, policy_blocked, executed, errors.\n\nAuto-extract: when the page embeds JSON-bearing <script> tags (density.json_scripts > 0 — covers application/json, application/ld+json, text/x-magento-init, text/x-shopify-app, etc.), navigate auto-runs `extract()` and returns the result as the `extract` field. Saves a round trip on the common case where the data the JS would have rendered is already sitting in the HTML — JSON-LD article schemas on news sites, __NEXT_DATA__ page state on Next.js apps, json_in_script product blobs on Magento/Shopify, GitHub RSC payloads, etc. Capped at 16 KB inline; over that limit `extract` returns a stub with strategy/confidence/size_bytes/hint and the agent should call `extract()` explicitly to retrieve the full payload. Pages with no embedded JSON get extract:null and pay zero extra cost.\n\nTool advice: navigate also returns `tool_likelihoods` plus `tool_recommendations`, derived from concrete page signals (structure/headings, selector hints, density, embedded data, network captures, challenge state, and script pathology) so agents can pick the next tool without guessing.\n\nAuto-solve: Reddit's JS proof-of-work challenge (provider: reddit_js_challenge) is transparently solved — the challenge is detected, the GET solution URL is computed (solution = hex_value + hex_value), and the real page is returned in one navigate call. challenge:null on the result means the real page was served. Subsequent navigations in the same session carry the clearance cookie and skip the challenge entirely.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -7300,7 +7303,10 @@ async fn dispatch_tool(session: &mut Session, name: &str, args: &Value) -> Resul
             let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(20) as u32;
             session.query_text(text, selector, exact, limit)
         }
-        "blockmap" => session.blockmap(),
+        "blockmap" => session.blockmap().map(|mut v| {
+            if let Some(obj) = v.as_object_mut() { obj.remove("ascii"); }
+            v
+        }),
         "page_model" => {
             let goal = str_arg("goal");
             let types = args.get("types");

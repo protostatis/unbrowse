@@ -1,0 +1,1008 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The Chrome Tax — What Heavy Browsers Cost Your Agent</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Spectral:ital,wght@0,300;0,400;0,600;0,700;1,400&family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #08090d; --bg-elev: #0e1016; --surface: #12141c; --surface-hover: #161823;
+  --border: #1e2030; --border-light: #2a2d3f;
+  --text: #e8e9ed; --text-sec: #a8aab5; --muted: #5c5e6e; --dim: #3a3c4a;
+  --cost: #ef4444; --cost-dim: rgba(239,68,68,0.12);
+  --savings: #10b981; --savings-dim: rgba(16,185,129,0.12);
+  --warning: #f59e0b; --warning-dim: rgba(245,158,11,0.12);
+  --accent: #f97316; --accent-dim: rgba(249,115,22,0.12);
+  --info: #818cf8; --info-dim: rgba(129,140,248,0.12);
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+html { scroll-behavior:smooth; }
+body {
+  font-family:'DM Sans',system-ui,sans-serif;
+  background:var(--bg); color:var(--text); line-height:1.6;
+  overflow-x:hidden;
+  background-image:
+    radial-gradient(circle at 20% 0%,rgba(249,115,22,0.04) 0%,transparent 40%),
+    radial-gradient(circle at 80% 100%,rgba(16,185,129,0.04) 0%,transparent 40%);
+}
+.mono { font-family:'JetBrains Mono',monospace; }
+
+/* HERO */
+.hero {
+  min-height:100vh; display:flex; flex-direction:column;
+  justify-content:center; align-items:center; padding:4rem 2rem;
+  text-align:center; position:relative;
+}
+.hero::before {
+  content:''; position:absolute; inset:0;
+  background-image:
+    linear-gradient(rgba(30,32,48,0.4) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(30,32,48,0.4) 1px,transparent 1px);
+  background-size:60px 60px;
+  mask-image:radial-gradient(ellipse at center,black 30%,transparent 70%);
+  -webkit-mask-image:radial-gradient(ellipse at center,black 30%,transparent 70%);
+  pointer-events:none;
+}
+.hero-tag {
+  font-size:0.75rem; letter-spacing:0.25em; text-transform:uppercase;
+  color:var(--accent); margin-bottom:2rem; position:relative;
+}
+.hero h1 {
+  font-family:'Spectral',serif;
+  font-size:clamp(2.5rem,7vw,5.5rem); font-weight:300;
+  line-height:1.05; margin-bottom:1.5rem; max-width:900px;
+  position:relative; letter-spacing:-0.02em;
+}
+.hero h1 em { font-style:italic; font-weight:400; color:var(--cost); }
+.hero-sub {
+  font-size:1.1rem; color:var(--text-sec); max-width:580px;
+  margin-bottom:3rem; position:relative;
+}
+.hero-stat { position:relative; margin-bottom:3rem; }
+.hero-stat-value {
+  font-family:'JetBrains Mono',monospace;
+  font-size:clamp(3rem,10vw,6rem); font-weight:700;
+  color:var(--cost); line-height:1; letter-spacing:-0.05em;
+  text-shadow:0 0 60px rgba(239,68,68,0.3);
+  transition:all 0.4s ease;
+}
+.hero-stat-label {
+  font-size:0.85rem; color:var(--muted); text-transform:uppercase;
+  letter-spacing:0.15em; margin-top:0.5rem;
+}
+.hero-stat-detail {
+  font-size:0.9rem; color:var(--text-sec); margin-top:0.5rem; max-width:420px;
+}
+.scroll-hint {
+  position:absolute; bottom:2rem; left:50%; transform:translateX(-50%);
+  color:var(--muted); font-size:0.75rem; letter-spacing:0.2em;
+  text-transform:uppercase; animation:bounce 2s infinite;
+}
+@keyframes bounce {
+  0%,100% { transform:translateX(-50%) translateY(0); opacity:0.5; }
+  50% { transform:translateX(-50%) translateY(8px); opacity:1; }
+}
+
+/* SECTIONS */
+.section { max-width:1200px; margin:0 auto; padding:5rem 2rem; }
+.section-label {
+  font-size:0.7rem; letter-spacing:0.25em; text-transform:uppercase;
+  color:var(--accent); margin-bottom:0.75rem;
+}
+.section-title {
+  font-family:'Spectral',serif; font-size:clamp(1.75rem,4vw,2.75rem);
+  font-weight:400; line-height:1.15; margin-bottom:1rem; letter-spacing:-0.01em;
+}
+.section-title em { font-style:italic; color:var(--savings); }
+.section-desc {
+  color:var(--text-sec); max-width:600px; margin-bottom:3rem; font-size:1.05rem;
+}
+
+/* PRESETS */
+.presets { display:flex; flex-wrap:wrap; gap:0.75rem; margin-bottom:2.5rem; }
+.preset-btn {
+  background:var(--surface); border:1px solid var(--border);
+  color:var(--text-sec); padding:0.6rem 1.25rem; border-radius:100px;
+  font-family:inherit; font-size:0.85rem; cursor:pointer; transition:all 0.2s;
+}
+.preset-btn:hover {
+  border-color:var(--accent); color:var(--text); background:var(--surface-hover);
+}
+.preset-btn.active {
+  background:var(--accent-dim); border-color:var(--accent); color:var(--accent);
+}
+
+/* CALC GRID */
+.calc-grid { display:grid; grid-template-columns:380px 1fr; gap:2rem; align-items:start; }
+@media (max-width:900px) { .calc-grid { grid-template-columns:1fr; } }
+
+/* INPUTS */
+.inputs-panel {
+  background:var(--surface); border:1px solid var(--border);
+  border-radius:16px; padding:2rem; position:sticky; top:2rem;
+}
+@media (max-width:900px) { .inputs-panel { position:static; } }
+.inputs-panel h3 {
+  font-size:0.75rem; text-transform:uppercase; letter-spacing:0.15em;
+  color:var(--muted); margin-bottom:1.5rem;
+}
+.input-group { margin-bottom:1.75rem; }
+.input-group label {
+  display:flex; justify-content:space-between; align-items:baseline;
+  font-size:0.85rem; color:var(--text-sec); margin-bottom:0.5rem;
+}
+.input-value {
+  font-family:'JetBrains Mono',monospace; font-size:1.25rem;
+  font-weight:700; color:var(--accent);
+}
+.slider {
+  -webkit-appearance:none; appearance:none; width:100%; height:6px;
+  background:var(--border); border-radius:3px; outline:none; cursor:pointer;
+}
+.slider::-webkit-slider-thumb {
+  -webkit-appearance:none; appearance:none; width:20px; height:20px;
+  background:var(--accent); border-radius:50%; cursor:pointer;
+  border:3px solid var(--bg); box-shadow:0 0 0 1px var(--accent);
+  transition:transform 0.15s;
+}
+.slider::-webkit-slider-thumb:hover { transform:scale(1.2); }
+.slider::-moz-range-thumb {
+  width:20px; height:20px; background:var(--accent); border-radius:50%;
+  cursor:pointer; border:3px solid var(--bg); box-shadow:0 0 0 1px var(--accent);
+}
+.slider-ticks {
+  display:flex; justify-content:space-between; margin-top:0.4rem;
+  font-size:0.7rem; color:var(--dim); font-family:'JetBrains Mono',monospace;
+}
+.select-group {
+  width:100%; background:var(--bg-elev); border:1px solid var(--border);
+  border-radius:8px; padding:0.75rem 1rem; color:var(--text);
+  font-family:inherit; font-size:0.9rem; cursor:pointer; appearance:none;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%235c5e6e'%3E%3Cpath d='M6 9L1 4h10z'/%3E%3C/svg%3E");
+  background-repeat:no-repeat; background-position:right 1rem center; padding-right:2.5rem;
+}
+.select-group:focus { outline:none; border-color:var(--accent); }
+.select-group option { background:var(--surface); }
+
+/* RESULTS */
+.results-dashboard { display:flex; flex-direction:column; gap:1.5rem; }
+.pain-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:1rem; }
+@media (max-width:600px) { .pain-grid { grid-template-columns:1fr; } }
+.pain-card {
+  background:var(--surface); border:1px solid var(--border);
+  border-radius:12px; padding:1.5rem; position:relative; overflow:hidden;
+}
+.pain-card::before {
+  content:''; position:absolute; top:0; left:0; right:0; height:2px;
+  background:var(--cost);
+}
+.pain-card.savings::before { background:var(--savings); }
+.pain-card.warning::before { background:var(--warning); }
+.pain-label {
+  font-size:0.7rem; text-transform:uppercase; letter-spacing:0.1em;
+  color:var(--muted); margin-bottom:0.75rem;
+}
+.pain-value {
+  font-family:'JetBrains Mono',monospace; font-size:2rem; font-weight:700;
+  color:var(--cost); line-height:1; margin-bottom:0.5rem;
+}
+.pain-card.savings .pain-value { color:var(--savings); }
+.pain-card.warning .pain-value { color:var(--warning); }
+.pain-detail { font-size:0.8rem; color:var(--text-sec); line-height:1.4; }
+.pain-comparison {
+  font-size:0.75rem; color:var(--dim); margin-top:0.5rem; font-style:italic;
+}
+
+/* CHARTS */
+.chart-card {
+  background:var(--surface); border:1px solid var(--border);
+  border-radius:12px; padding:2rem;
+}
+.chart-card h3 {
+  font-size:0.75rem; text-transform:uppercase; letter-spacing:0.15em;
+  color:var(--muted); margin-bottom:1.5rem;
+}
+.bar-chart { display:flex; flex-direction:column; gap:1rem; }
+.bar-row {
+  display:grid; grid-template-columns:140px 1fr 80px;
+  align-items:center; gap:1rem;
+}
+.bar-label { font-size:0.85rem; text-align:right; color:var(--text-sec); }
+.bar-label.current { color:var(--cost); font-weight:600; }
+.bar-label.recommended { color:var(--savings); font-weight:600; }
+.bar-track {
+  height:28px; background:var(--bg-elev); border-radius:6px;
+  overflow:hidden; position:relative;
+}
+.bar-fill {
+  height:100%; border-radius:6px;
+  transition:width 0.6s cubic-bezier(0.4,0,0.2,1);
+  display:flex; align-items:center; padding-left:0.75rem;
+  font-family:'JetBrains Mono',monospace; font-size:0.75rem;
+  font-weight:600; color:var(--bg);
+}
+.bar-fill.cost { background:linear-gradient(90deg,var(--cost),#dc2626); }
+.bar-fill.savings { background:linear-gradient(90deg,var(--savings),#059669); }
+.bar-fill.neutral { background:linear-gradient(90deg,var(--info),#4f46e5); }
+.bar-fill.dim { background:var(--border-light); color:var(--text-sec); }
+.bar-fill.zero { background:transparent; border-left:2px solid var(--dim); }
+.bar-value { font-family:'JetBrains Mono',monospace; font-size:0.85rem; font-weight:600; }
+
+/* PROJECTION */
+.projection-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:1rem; }
+@media (max-width:700px) { .projection-grid { grid-template-columns:repeat(2,1fr); } }
+.projection-card {
+  background:var(--surface); border:1px solid var(--border);
+  border-radius:12px; padding:1.5rem; text-align:center;
+}
+.projection-card .period {
+  font-size:0.7rem; text-transform:uppercase; letter-spacing:0.1em;
+  color:var(--muted); margin-bottom:0.5rem;
+}
+.projection-card .amount {
+  font-family:'JetBrains Mono',monospace; font-size:1.5rem;
+  font-weight:700; color:var(--cost); margin-bottom:0.25rem;
+}
+.projection-card.savings .amount { color:var(--savings); }
+.projection-card .detail { font-size:0.75rem; color:var(--dim); }
+
+/* CAPABILITY */
+.capability-section { overflow-x:auto; }
+.capability-table {
+  width:100%; border-collapse:collapse; font-size:0.85rem; min-width:700px;
+}
+.capability-table th,.capability-table td {
+  padding:0.85rem 1rem; text-align:center; border-bottom:1px solid var(--border);
+}
+.capability-table th {
+  color:var(--muted); font-weight:500; font-size:0.75rem;
+  text-transform:uppercase; letter-spacing:0.05em;
+  cursor:pointer; user-select:none; transition:color 0.2s;
+}
+.capability-table th:hover { color:var(--text); }
+.capability-table th.active { color:var(--accent); }
+.capability-table th:first-child,.capability-table td:first-child {
+  text-align:left; font-weight:600;
+}
+.capability-table td.yes { color:var(--savings); }
+.capability-table td.no { color:var(--dim); }
+.capability-table td.partial { color:var(--warning); }
+.capability-table td.highlight { background:var(--accent-dim); }
+.cap-icon { font-size:1.1rem; }
+
+/* SCALE */
+.scale-section {
+  background:var(--surface); border:1px solid var(--border);
+  border-radius:16px; padding:2.5rem;
+}
+.scale-display { display:flex; align-items:baseline; gap:1rem; margin-bottom:0.5rem; }
+.scale-display .big-num {
+  font-family:'JetBrains Mono',monospace; font-size:3rem;
+  font-weight:700; color:var(--accent); line-height:1;
+}
+.scale-display .label { font-size:0.9rem; color:var(--text-sec); }
+.scale-readout {
+  display:grid; grid-template-columns:1fr 1fr 1fr; gap:1rem;
+  margin:1.5rem 0; padding:1.25rem; background:var(--bg-elev);
+  border:1px solid var(--border); border-radius:10px;
+}
+.scale-readout .item { text-align:center; }
+.scale-readout .item .ilabel {
+  font-size:0.65rem; text-transform:uppercase; letter-spacing:0.1em;
+  color:var(--muted); margin-bottom:0.3rem;
+}
+.scale-readout .item .ival {
+  font-family:'JetBrains Mono',monospace; font-size:1.1rem; font-weight:700;
+}
+.scale-readout .item.cost .ival { color:var(--cost); }
+.scale-readout .item.alt .ival { color:var(--savings); }
+.scale-readout .item.gap .ival { color:var(--accent); }
+.scale-chart {
+  display:flex; align-items:flex-end; gap:0; height:220px;
+  margin-top:1.5rem; padding:0 0.5rem 2rem; border-bottom:1px solid var(--border);
+  position:relative; overflow-x:auto;
+}
+.scale-group {
+  flex:1; display:flex; flex-direction:column; align-items:center;
+  gap:4px; min-width:48px; position:relative; padding:0 2px;
+  transition:opacity 0.2s;
+}
+.scale-group.active { opacity:1; }
+.scale-group:not(.active) { opacity:0.4; }
+.scale-group:hover { opacity:1; }
+.scale-pair {
+  display:flex; align-items:flex-end; gap:3px; height:180px; width:100%;
+  justify-content:center;
+}
+.scale-bar {
+  width:14px; border-radius:3px 3px 0 0; position:relative;
+  transition:height 0.5s cubic-bezier(0.4,0,0.2,1); min-height:2px;
+}
+.scale-bar.current { background:linear-gradient(180deg,var(--cost),#dc2626); }
+.scale-bar.alt { background:linear-gradient(180deg,var(--savings),#059669); }
+.scale-group.active .scale-bar.current { box-shadow:0 0 12px rgba(239,68,68,0.4); }
+.scale-group.active .scale-bar.alt { box-shadow:0 0 12px rgba(16,185,129,0.4); }
+.scale-group-label {
+  font-family:'JetBrains Mono',monospace; font-size:0.65rem;
+  color:var(--dim); margin-top:0.5rem; white-space:nowrap;
+}
+.scale-group.active .scale-group-label { color:var(--accent); font-weight:700; }
+.scale-bar:hover::after {
+  content:attr(data-label); position:absolute; bottom:100%;
+  left:50%; transform:translateX(-50%); background:var(--bg-elev);
+  border:1px solid var(--border); padding:0.4rem 0.6rem;
+  border-radius:6px; font-size:0.7rem; white-space:nowrap;
+  font-family:'JetBrains Mono',monospace; margin-bottom:4px;
+  z-index:10; pointer-events:none;
+}
+.scale-legend {
+  display:flex; gap:2rem; margin-top:1rem; font-size:0.8rem; color:var(--text-sec);
+}
+.legend-dot {
+  display:inline-block; width:10px; height:10px; border-radius:50%;
+  margin-right:0.5rem; vertical-align:middle;
+}
+
+/* DECISION */
+.decision-tree {
+  background:var(--surface); border:1px solid var(--border);
+  border-radius:16px; padding:2.5rem;
+}
+.decision-question {
+  font-family:'Spectral',serif; font-size:1.3rem;
+  margin-bottom:1.5rem; color:var(--text);
+}
+.decision-options { display:grid; grid-template-columns:repeat(2,1fr); gap:1rem; }
+@media (max-width:600px) { .decision-options { grid-template-columns:1fr; } }
+.decision-btn {
+  background:var(--bg-elev); border:1px solid var(--border);
+  color:var(--text-sec); padding:1.25rem 1.5rem; border-radius:10px;
+  font-family:inherit; font-size:0.95rem; cursor:pointer;
+  text-align:left; transition:all 0.2s; line-height:1.4;
+}
+.decision-btn:hover {
+  border-color:var(--accent); background:var(--surface-hover); color:var(--text);
+}
+.decision-result {
+  margin-top:2rem; padding:1.5rem; background:var(--savings-dim);
+  border:1px solid var(--savings); border-radius:10px; display:none;
+}
+.decision-result.visible { display:block; }
+.decision-result .rec-label {
+  font-size:0.7rem; text-transform:uppercase; letter-spacing:0.15em;
+  color:var(--savings); margin-bottom:0.5rem;
+}
+.decision-result .rec-tool {
+  font-family:'Spectral',serif; font-size:1.5rem; margin-bottom:0.5rem;
+}
+.decision-result .rec-reason { font-size:0.9rem; color:var(--text-sec); }
+
+/* FULL TABLE */
+.full-table {
+  width:100%; border-collapse:collapse; font-size:0.85rem;
+  background:var(--surface); border-radius:12px; overflow:hidden;
+}
+.full-table th,.full-table td {
+  padding:1rem 1.25rem; text-align:left; border-bottom:1px solid var(--border);
+}
+.full-table th {
+  color:var(--muted); font-weight:500; font-size:0.7rem;
+  text-transform:uppercase; letter-spacing:0.1em;
+}
+.full-table tr.highlight { background:var(--savings-dim); }
+.full-table tr.highlight td:first-child { color:var(--savings); font-weight:700; }
+.full-table .num { font-family:'JetBrains Mono',monospace; }
+
+/* CTA */
+.cta-section {
+  text-align:center; padding:5rem 2rem; border-top:1px solid var(--border);
+}
+.cta-section h2 {
+  font-family:'Spectral',serif; font-size:2rem; font-weight:400; margin-bottom:1rem;
+}
+.cta-section p { color:var(--text-sec); max-width:500px; margin:0 auto 2rem; }
+.cta-btn {
+  display:inline-block; background:var(--savings); color:var(--bg);
+  padding:1rem 2.5rem; border-radius:8px; text-decoration:none;
+  font-weight:700; font-size:1rem; transition:transform 0.2s,box-shadow 0.2s;
+}
+.cta-btn:hover { transform:translateY(-2px); box-shadow:0 8px 30px rgba(16,185,129,0.3); }
+
+/* FOOTER */
+footer {
+  text-align:center; padding:2rem; color:var(--muted);
+  font-size:0.8rem; border-top:1px solid var(--border);
+}
+footer a { color:var(--accent); text-decoration:none; }
+footer a:hover { text-decoration:underline; }
+
+/* ANIMATIONS */
+.reveal { opacity:0; transform:translateY(30px); transition:opacity 0.8s ease,transform 0.8s ease; }
+.reveal.visible { opacity:1; transform:translateY(0); }
+@keyframes countUp { from { opacity:0.5; } to { opacity:1; } }
+.animate-count { animation:countUp 0.4s ease; }
+</style>
+</head>
+<body>
+
+<!-- HERO -->
+<section class="hero">
+  <div class="hero-tag">A Field Report</div>
+  <h1>Every time your agent launches Chrome,<br>you're paying a <em>tax</em>.</h1>
+  <p class="hero-sub">In memory. In cold starts. In tokens. In infrastructure you didn't need. Here's the math — and the middle ground between curl and Chrome.</p>
+  <div class="hero-stat">
+    <div class="hero-stat-value" id="hero-stat-value">14 GB</div>
+    <div class="hero-stat-label" id="hero-stat-label">RAM wasted on 50 Chrome sessions</div>
+    <div class="hero-stat-detail" id="hero-stat-detail">That's 14,000 megabytes to read web pages your agent never needed to render.</div>
+  </div>
+  <div class="scroll-hint">Scroll to calculate yours</div>
+</section>
+
+<!-- CALCULATOR -->
+<section class="section">
+  <div class="section-label">The Calculator</div>
+  <h2 class="section-title">What's <em>your</em> Chrome tax?</h2>
+  <p class="section-desc">Adjust the sliders to match your workload. Everything updates in real time. Pick a preset to start from a realistic scenario.</p>
+  <div class="presets" id="presets"></div>
+  <div class="calc-grid">
+    <div class="inputs-panel">
+      <h3>Your Workload</h3>
+      <div class="input-group">
+        <label>Concurrent sessions <span class="input-value" id="sessions-val">10</span></label>
+        <input type="range" class="slider" id="sessions" min="1" max="500" value="10">
+        <div class="slider-ticks"><span>1</span><span>100</span><span>500</span></div>
+      </div>
+      <div class="input-group">
+        <label>Pages per task <span class="input-value" id="pages-val">5</span></label>
+        <input type="range" class="slider" id="pages" min="1" max="100" value="5">
+        <div class="slider-ticks"><span>1</span><span>50</span><span>100</span></div>
+      </div>
+      <div class="input-group">
+        <label>Tasks per day <span class="input-value" id="tasks-val">100</span></label>
+        <input type="range" class="slider" id="tasks" min="1" max="10000" value="100">
+        <div class="slider-ticks"><span>1</span><span>5K</span><span>10K</span></div>
+      </div>
+      <div class="input-group">
+        <label style="display:block;margin-bottom:0.5rem;">Deployment target</label>
+        <select class="select-group" id="deployment">
+          <option value="lambda">AWS Lambda</option>
+          <option value="fly">Fly.io</option>
+          <option value="railway">Railway</option>
+          <option value="k8s">Kubernetes</option>
+          <option value="local" selected>Local / VM</option>
+        </select>
+      </div>
+      <div class="input-group">
+        <label style="display:block;margin-bottom:0.5rem;">Current browser tool</label>
+        <select class="select-group" id="current-tool">
+          <option value="playwright" selected>Playwright</option>
+          <option value="puppeteer">Puppeteer</option>
+          <option value="browserbase">Browserbase (managed)</option>
+          <option value="other">Other Chrome-based</option>
+        </select>
+      </div>
+      <div class="input-group">
+        <label style="display:block;margin-bottom:0.5rem;">LLM cost per 1K tokens</label>
+        <select class="select-group" id="llm-cost">
+          <option value="0.01" selected>GPT-4 ($0.01)</option>
+          <option value="0.015">Claude 3 ($0.015)</option>
+          <option value="0.005">GPT-3.5 ($0.005)</option>
+          <option value="0.0005">Llama 3 ($0.0005)</option>
+          <option value="0">Local model (free)</option>
+        </select>
+      </div>
+    </div>
+    <div class="results-dashboard">
+      <div class="pain-grid">
+        <div class="pain-card">
+          <div class="pain-label">Total RAM</div>
+          <div class="pain-value" id="pain-ram">2.7 GB</div>
+          <div class="pain-detail" id="pain-ram-detail">Across 10 concurrent sessions</div>
+          <div class="pain-comparison" id="pain-ram-comparison"></div>
+        </div>
+        <div class="pain-card warning">
+          <div class="pain-label">Cold Start</div>
+          <div class="pain-value" id="pain-cold">8.0s</div>
+          <div class="pain-detail" id="pain-cold-detail">Per session initialization</div>
+          <div class="pain-comparison" id="pain-cold-comparison"></div>
+        </div>
+        <div class="pain-card savings">
+          <div class="pain-label">If you switched</div>
+          <div class="pain-value" id="pain-savings">$0</div>
+          <div class="pain-detail" id="pain-savings-detail">Saved per day with unbrowser</div>
+          <div class="pain-comparison" id="pain-savings-comparison"></div>
+        </div>
+      </div>
+      <div class="chart-card">
+        <h3>Memory Footprint — Total RAM at Scale</h3>
+        <div class="bar-chart" id="memory-chart"></div>
+      </div>
+      <div class="chart-card">
+        <h3>Token Output — Total Volume per Day</h3>
+        <div class="bar-chart" id="token-chart"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- COST PROJECTION -->
+<section class="section reveal">
+  <div class="section-label">Cost Projection</div>
+  <h2 class="section-title">What this costs <em>over time</em></h2>
+  <p class="section-desc">The tax compounds. Every task pays it — in cloud compute and in LLM tokens. Here's what your current setup costs, and what you'd save with a lighter tool.</p>
+  <div class="projection-grid" id="projection-grid"></div>
+</section>
+
+<!-- CAPABILITY MATRIX -->
+<section class="section reveal">
+  <div class="section-label">The Full Picture</div>
+  <h2 class="section-title">Not just cost — <em>capability</em></h2>
+  <p class="section-desc">A cheaper tool that can't do your task isn't a savings. Here's what each browser tool actually supports. Click a column to highlight.</p>
+  <div class="capability-section">
+    <table class="capability-table" id="capability-table">
+      <thead>
+        <tr>
+          <th>Capability</th>
+          <th data-tool="curl">curl</th>
+          <th data-tool="webfetch">WebFetch</th>
+          <th data-tool="unbrowser" class="active">unbrowser</th>
+          <th data-tool="playwright">Playwright</th>
+          <th data-tool="browserbase">Browserbase</th>
+        </tr>
+      </thead>
+      <tbody id="capability-body"></tbody>
+    </table>
+  </div>
+</section>
+
+<!-- SCALE SIMULATOR -->
+<section class="section reveal">
+  <div class="section-label">Scale Dynamics</div>
+  <h2 class="section-title">How the tax <em>scales</em></h2>
+  <p class="section-desc">The pain grows linearly — but the gap between Chrome and lighter tools grows with it. Drag to see how your costs change from 1 to 500 concurrent sessions.</p>
+  <div class="scale-section">
+    <div class="scale-display">
+      <span class="big-num" id="scale-sessions">50</span>
+      <span class="label">concurrent sessions</span>
+    </div>
+    <input type="range" class="slider" id="scale-slider" min="1" max="500" value="50">
+    <div class="slider-ticks"><span>1</span><span>125</span><span>250</span><span>375</span><span>500</span></div>
+    <div class="scale-readout" id="scale-readout"></div>
+    <div class="scale-chart" id="scale-chart"></div>
+    <div class="scale-legend">
+      <span><span class="legend-dot" style="background:var(--cost)"></span>Current (<span id="scale-current-name">Playwright</span>)</span>
+      <span><span class="legend-dot" style="background:var(--savings)"></span>unbrowser</span>
+    </div>
+  </div>
+</section>
+
+<!-- DECISION TREE -->
+<section class="section reveal">
+  <div class="section-label">Decision Framework</div>
+  <h2 class="section-title">Which tool should <em>you</em> use?</h2>
+  <p class="section-desc">Answer honestly. We'll recommend the lightest tool that handles your workload — and tell you when you actually need Chrome.</p>
+  <div class="decision-tree">
+    <div class="decision-question" id="decision-q">Does your task need to see pixels — screenshots, canvas, or visual layout?</div>
+    <div class="decision-options" id="decision-opts"></div>
+    <div class="decision-result" id="decision-result"></div>
+  </div>
+</section>
+
+<!-- FULL TABLE -->
+<section class="section reveal">
+  <div class="section-label">The Reference</div>
+  <h2 class="section-title">Full comparison</h2>
+  <p class="section-desc">Every metric, side by side. This is the data behind the calculator.</p>
+  <div style="overflow-x:auto;">
+    <table class="full-table" id="full-table"></table>
+  </div>
+</section>
+
+<!-- CTA -->
+<section class="cta-section">
+  <h2>There's a middle ground between curl and Chrome.</h2>
+  <p>unbrowser is a 10MB binary that gives your agent JavaScript execution, cookies, forms, and clicks — without the 280MB per-session tax.</p>
+  <a href="https://unchainedsky.com/unbrowser" class="cta-btn">Try unbrowser</a>
+</section>
+
+<footer>
+  Built by <a href="https://unchainedsky.com">Unchained Sky</a> ·
+  <a href="https://unchainedsky.com/unbrowser">unbrowser</a> — stateful WebFetch for LLM agents ·
+  Numbers from real measurements ·
+  <a href="https://github.com/unchainedsky/chrome-tax-calculator">Methodology</a>
+</footer>
+
+<script>
+// === DATA ===
+const TOOLS = {
+  curl: { name:'curl', cat:'Static', binaryMB:2, ramMB:2, coldMs:10, tokens:3000,
+    js:'no', clicks:'no', cookies:'no', forms:'no', render:'no', stealth:'no', challenge:'no',
+    output:'Raw HTML', best:'Static pages', limits:'No JS, no interaction', color:'neutral' },
+  webfetch: { name:'WebFetch', cat:'Provider', binaryMB:0, ramMB:0, coldMs:500, tokens:2000,
+    js:'partial', clicks:'no', cookies:'no', forms:'no', render:'no', stealth:'no', challenge:'no',
+    output:'Markdown', best:'Quick summaries', limits:'No session, opaque JS', color:'neutral' },
+  unbrowser: { name:'unbrowser', cat:'Middle tier', binaryMB:10, ramMB:30, coldMs:100, tokens:500,
+    js:'yes', clicks:'yes', cookies:'yes', forms:'yes', render:'no', stealth:'yes', challenge:'yes',
+    output:'BlockMap', best:'Agent browsing (non-visual)', limits:'No rendering, no CAPTCHA solving', color:'savings' },
+  playwright: { name:'Playwright', cat:'Full browser', binaryMB:350, ramMB:280, coldMs:8000, tokens:12000,
+    js:'yes', clicks:'yes', cookies:'yes', forms:'yes', render:'yes', stealth:'no', challenge:'no',
+    output:'Raw HTML / Screenshots', best:'Visual tasks, testing', limits:'Heavy, detectable', color:'cost' },
+  puppeteer: { name:'Puppeteer', cat:'Full browser', binaryMB:350, ramMB:300, coldMs:10000, tokens:12000,
+    js:'yes', clicks:'yes', cookies:'yes', forms:'yes', render:'yes', stealth:'no', challenge:'no',
+    output:'Raw HTML / Screenshots', best:'Visual scraping', limits:'Same as Playwright', color:'cost' },
+  browserbase: { name:'Browserbase', cat:'Managed', binaryMB:0, ramMB:0, coldMs:2000, tokens:12000,
+    js:'yes', clicks:'yes', cookies:'yes', forms:'yes', render:'yes', stealth:'partial', challenge:'no',
+    output:'Raw HTML / Screenshots', best:'Managed Chrome at scale', limits:'Per-session cost, external dep', color:'cost' }
+};
+
+const DEPLOY = {
+  lambda: { ramMult:1.2, coldMult:2.0, costPerGBHr:0.06, name:'Lambda' },
+  fly: { ramMult:1.0, coldMult:1.2, costPerGBHr:0.0042, name:'Fly.io' },
+  railway: { ramMult:1.0, coldMult:1.0, costPerGBHr:0.208, name:'Railway' },
+  k8s: { ramMult:1.1, coldMult:1.0, costPerGBHr:0.036, name:'K8s' },
+  local: { ramMult:1.0, coldMult:1.0, costPerGBHr:0, name:'Local' }
+};
+
+const PRESETS = [
+  { name:'Solo dev', sessions:1, pages:5, tasks:10, deploy:'local', tool:'playwright' },
+  { name:'Startup agent', sessions:10, pages:20, tasks:100, deploy:'fly', tool:'playwright' },
+  { name:'Scraping pipeline', sessions:50, pages:50, tasks:1000, deploy:'fly', tool:'puppeteer' },
+  { name:'Lambda function', sessions:5, pages:10, tasks:500, deploy:'lambda', tool:'playwright' },
+  { name:'Enterprise scale', sessions:100, pages:50, tasks:5000, deploy:'k8s', tool:'playwright' }
+];
+
+const CAPS = [
+  { key:'js', label:'JavaScript execution' },
+  { key:'clicks', label:'Clicks & interaction' },
+  { key:'cookies', label:'Cookies & session' },
+  { key:'forms', label:'Form submission' },
+  { key:'render', label:'Visual rendering' },
+  { key:'stealth', label:'Anti-bot stealth' },
+  { key:'challenge', label:'Challenge detection' }
+];
+
+const DECISION_TREE = [
+  { q:'Does your task need to see pixels — screenshots, canvas, or visual layout?', yes:'chrome', no:1 },
+  { q:'Does the page require JavaScript to load its content?', yes:2, no:'curl' },
+  { q:'Do you need to interact — clicks, forms, or multi-step flows?', yes:3, no:'webfetch' },
+  { q:'Do you need cookies or session state across requests?', yes:'unbrowser', no:'unbrowser' }
+];
+
+const REC = {
+  curl: { tool:'curl', reason:'Your page is static HTML. No JavaScript, no interaction needed. curl with a readability extractor is all you need.' },
+  webfetch: { tool:'WebFetch', reason:'The page needs JS but you just want the text. Provider-side WebFetch handles this — no browser to deploy.' },
+  unbrowser: { tool:'unbrowser', reason:'You need JS, interaction, and session — but no rendering. unbrowser is the lightest tool that handles all three. 10MB binary, 30MB RAM, 500 tokens per page.' },
+  chrome: { tool:'Playwright / Chrome', reason:'You need visual rendering. Only a full browser engine will work here. unbrowser cannot do screenshots, canvas, or WebGL.' }
+};
+
+let state = { sessions:10, pages:5, tasks:100, deploy:'local', tool:'playwright', llmCost:0.01 };
+
+// === HELPERS ===
+const fmt = n => n>=1e6 ? (n/1e6).toFixed(1)+'M' : n>=1e3 ? (n/1e3).toFixed(1)+'K' : Math.round(n).toString();
+const fmtBytes = mb => mb>=1024 ? (mb/1024).toFixed(1)+' GB' : Math.round(mb)+' MB';
+const fmtMoney = n => n>=1000 ? '$'+(n/1000).toFixed(1)+'K' : '$'+n.toFixed(2);
+
+function realWorld(ramMB) {
+  if (ramMB >= 1024) return "That's "+Math.round(ramMB/150)+" Chrome tabs of memory";
+  if (ramMB >= 500) return "~"+Math.round(ramMB/150)+" Chrome tabs worth";
+  if (ramMB >= 100) return "~"+Math.round(ramMB/7)+" Spotify playlists";
+  return Math.round(ramMB)+" MB";
+}
+
+function calcTool(key, sessions, pages, tasks, deploy) {
+  const t = TOOLS[key];
+  const d = DEPLOY[deploy];
+  const totalRam = t.ramMB * sessions * d.ramMult;
+  const coldSec = (t.coldMs * d.coldMult) / 1000;
+  const totalTokens = t.tokens * pages * tasks;
+  const cloudCost = (totalRam / 1024) * d.costPerGBHr * (tasks * 0.05); // ~3 min per task
+  const tokenCost = totalTokens / 1000 * state.llmCost;
+  return { ...t, key, totalRam, coldSec, totalTokens, cloudCost, tokenCost, totalCost: cloudCost + tokenCost };
+}
+
+// === RENDER ===
+function renderPresets() {
+  document.getElementById('presets').innerHTML = PRESETS.map((p,i) =>
+    '<button class="preset-btn" onclick="applyPreset('+i+')">'+p.name+'</button>'
+  ).join('');
+}
+
+function applyPreset(i) {
+  const p = PRESETS[i];
+  state = { ...state, sessions:p.sessions, pages:p.pages, tasks:p.tasks, deploy:p.deploy, tool:p.tool };
+  document.getElementById('sessions').value = p.sessions;
+  document.getElementById('pages').value = p.pages;
+  document.getElementById('tasks').value = p.tasks;
+  document.getElementById('deployment').value = p.deploy;
+  document.getElementById('current-tool').value = p.tool;
+  updateAll();
+  document.querySelectorAll('.preset-btn').forEach((b,idx) => b.classList.toggle('active', idx===i));
+}
+
+function renderPainCards() {
+  const { sessions, pages, tasks, deploy, tool, llmCost } = state;
+  const current = calcTool(tool, sessions, pages, tasks, deploy);
+  const alt = calcTool('unbrowser', sessions, pages, tasks, deploy);
+  
+  document.getElementById('pain-ram').textContent = fmtBytes(current.totalRam);
+  document.getElementById('pain-ram-detail').textContent = 'Across '+sessions+' concurrent sessions';
+  document.getElementById('pain-ram-comparison').textContent = realWorld(current.totalRam);
+  
+  document.getElementById('pain-cold').textContent = current.coldSec.toFixed(1)+'s';
+  document.getElementById('pain-cold-detail').textContent = 'Per session on '+DEPLOY[deploy].name;
+  document.getElementById('pain-cold-comparison').textContent = alt.coldSec<0.2 ? 'unbrowser: '+(alt.coldSec*1000).toFixed(0)+'ms' : 'unbrowser: '+alt.coldSec.toFixed(1)+'s';
+  
+  const dailySavings = current.totalCost - alt.totalCost;
+  document.getElementById('pain-savings').textContent = fmtMoney(dailySavings);
+  document.getElementById('pain-savings-detail').textContent = 'Per day with unbrowser';
+  document.getElementById('pain-savings-comparison').textContent = fmtMoney(current.totalCost)+' → '+fmtMoney(alt.totalCost);
+  
+  // Hero stat
+  document.getElementById('hero-stat-value').textContent = fmtBytes(current.totalRam);
+  document.getElementById('hero-stat-label').textContent = 'RAM for '+sessions+' '+current.name+' sessions';
+  document.getElementById('hero-stat-detail').textContent = realWorld(current.totalRam)+'. Your agent never needed to render any of it.';
+}
+
+function renderChart(containerId, metric, title, fmtFn) {
+  const { sessions, pages, tasks, deploy } = state;
+  const keys = ['unbrowser', 'curl', 'webfetch', state.tool];
+  const unique = [...new Set(keys)];
+  const results = unique.map(k => calcTool(k, sessions, pages, tasks, deploy));
+  const max = Math.max(...results.map(r => r[metric]));
+  // Sort descending so biggest bar is on top
+  results.sort((a, b) => b[metric] - a[metric]);
+  
+  document.getElementById(containerId).innerHTML = results.map(r => {
+    const val = r[metric];
+    const isZero = val === 0;
+    const pct = max > 0 ? (val / max) * 100 : 0;
+    // Min 3% for visibility; zero gets a 0.5% hairline
+    const widthPct = isZero ? 0.5 : Math.max(pct, 3);
+    const cls = r.key === state.tool ? 'current' : r.key === 'unbrowser' ? 'recommended' : '';
+    const fillCls = r.key === state.tool ? 'cost' : r.key === 'unbrowser' ? 'savings' : (isZero ? 'zero' : 'dim');
+    // Only show text inside bar if wide enough (>12%); otherwise rely on bar-value column
+    const innerText = pct > 12 ? fmtFn(val) : '';
+    return '<div class="bar-row">'+
+      '<div class="bar-label '+cls+'">'+r.name+(r.key===state.tool?' (you)':'')+'</div>'+
+      '<div class="bar-track"><div class="bar-fill '+fillCls+'" style="width:'+widthPct+'%">'+innerText+'</div></div>'+
+      '<div class="bar-value">'+(isZero ? '\u2014' : fmtFn(val))+'</div>'+
+    '</div>';
+  }).join('');
+}
+
+function renderProjection() {
+  const { sessions, pages, tasks, deploy, tool, llmCost } = state;
+  const current = calcTool(tool, sessions, pages, tasks, deploy);
+  const alt = calcTool('unbrowser', sessions, pages, tasks, deploy);
+  
+  const periods = [
+    { label:'Per day', mult:1 },
+    { label:'Per week', mult:7 },
+    { label:'Per month', mult:30 },
+    { label:'Per year', mult:365 }
+  ];
+  
+  document.getElementById('projection-grid').innerHTML = periods.map((p,i) => {
+    const cost = current.totalCost * p.mult;
+    const save = (current.totalCost - alt.totalCost) * p.mult;
+    const isSave = i >= 1;
+    return '<div class="projection-card '+(isSave?'savings':'')+'">'+
+      '<div class="period">'+p.label+'</div>'+
+      '<div class="amount">'+(isSave?fmtMoney(save):fmtMoney(cost))+'</div>'+
+      '<div class="detail">'+(isSave?'saved with unbrowser':'current cost')+'</div>'+
+    '</div>';
+  }).join('');
+}
+
+function renderCapability(activeTool) {
+  const tools = ['curl','webfetch','unbrowser','playwright','browserbase'];
+  const capIcons = { yes:'<span class="cap-icon" style="color:var(--savings)">&#10003;</span>',
+                     no:'<span class="cap-icon" style="color:var(--dim)">&#10007;</span>',
+                     partial:'<span class="cap-icon" style="color:var(--warning)">&#9680;</span>' };
+  
+  document.getElementById('capability-body').innerHTML = CAPS.map(cap => {
+    return '<tr>'+'<td>'+cap.label+'</td>'+tools.map(t => {
+      const val = TOOLS[t][cap.key];
+      const highlight = t === activeTool ? 'highlight' : '';
+      return '<td class="'+val+' '+highlight+'">'+capIcons[val]+'</td>';
+    }).join('')+'</tr>';
+  }).join('');
+  
+  document.querySelectorAll('.capability-table th[data-tool]').forEach(th => {
+    th.classList.toggle('active', th.dataset.tool === activeTool);
+  });
+}
+
+function renderScale() {
+  const { pages, tasks, deploy, tool } = state;
+  const maxSessions = 500;
+  // 12 sample points for clean grouped bars
+  const samplePoints = [1, 25, 50, 75, 100, 150, 200, 250, 300, 350, 400, 500];
+  const results = samplePoints.map(s => {
+    const current = calcTool(tool, s, pages, tasks, deploy);
+    const alt = calcTool('unbrowser', s, pages, tasks, deploy);
+    return { sessions:s, current:current.totalRam, alt:alt.totalRam };
+  });
+  const globalMax = Math.max(...results.map(r => Math.max(r.current, r.alt)));
+  
+  document.getElementById('scale-chart').innerHTML = results.map(r => {
+    const h1 = Math.max(2, (r.current / globalMax) * 180);
+    const h2 = Math.max(2, (r.alt / globalMax) * 180);
+    return '<div class="scale-group" data-sessions="'+r.sessions+'">'+
+      '<div class="scale-pair">'+
+        '<div class="scale-bar current" style="height:'+h1+'px" data-label="'+r.sessions+' sess: '+fmtBytes(r.current)+'"></div>'+
+        '<div class="scale-bar alt" style="height:'+h2+'px" data-label="'+r.sessions+' sess: '+fmtBytes(r.alt)+'"></div>'+
+      '</div>'+
+      '<div class="scale-group-label">'+r.sessions+'</div>'+
+    '</div>';
+  }).join('');
+  
+  document.getElementById('scale-current-name').textContent = TOOLS[tool].name;
+  updateScaleReadout();
+}
+
+function updateScaleReadout() {
+  const { pages, tasks, deploy, tool } = state;
+  const sliderVal = +document.getElementById('scale-slider').value;
+  // Find nearest sample point
+  const samplePoints = [1, 25, 50, 75, 100, 150, 200, 250, 300, 350, 400, 500];
+  const nearest = samplePoints.reduce((prev, curr) =>
+    Math.abs(curr - sliderVal) < Math.abs(prev - sliderVal) ? curr : prev
+  );
+  const current = calcTool(tool, nearest, pages, tasks, deploy);
+  const alt = calcTool('unbrowser', nearest, pages, tasks, deploy);
+  const gap = current.totalRam - alt.totalRam;
+  const ratio = alt.totalRam > 0 ? (current.totalRam / alt.totalRam).toFixed(0) : '\u221e';
+  
+  document.getElementById('scale-readout').innerHTML =
+    '<div class="item cost"><div class="ilabel">'+TOOLS[tool].name+' RAM</div><div class="ival">'+fmtBytes(current.totalRam)+'</div></div>'+
+    '<div class="item alt"><div class="ilabel">unbrowser RAM</div><div class="ival">'+fmtBytes(alt.totalRam)+'</div></div>'+
+    '<div class="item gap"><div class="ilabel">The gap ('+ratio+'x)</div><div class="ival">'+fmtBytes(gap)+'</div></div>';
+  
+  // Highlight the active group
+  document.querySelectorAll('.scale-group').forEach(g => {
+    g.classList.toggle('active', +g.dataset.sessions === nearest);
+  });
+}
+
+function renderScaleDisplay() {
+  const val = document.getElementById('scale-slider').value;
+  document.getElementById('scale-sessions').textContent = val;
+  updateScaleReadout();
+}
+
+// DECISION TREE
+let decisionStep = 0;
+let decisionAnswers = [];
+
+function renderDecision() {
+  if (decisionStep >= DECISION_TREE.length) {
+    showDecisionResult();
+    return;
+  }
+  const step = DECISION_TREE[decisionStep];
+  document.getElementById('decision-q').textContent = step.q;
+  document.getElementById('decision-opts').innerHTML =
+    '<button class="decision-btn" onclick="decide(true)">Yes</button>'+
+    '<button class="decision-btn" onclick="decide(false)">No</button>';
+  document.getElementById('decision-result').classList.remove('visible');
+}
+
+function decide(answer) {
+  const step = DECISION_TREE[decisionStep];
+  decisionAnswers.push(answer);
+  const next = answer ? step.yes : step.no;
+  if (typeof next === 'string') {
+    showDecisionResult(next);
+  } else {
+    decisionStep = next;
+    renderDecision();
+  }
+}
+
+function showDecisionResult(recKey) {
+  let key = recKey;
+  if (!key) {
+    // Determine from answers
+    if (decisionAnswers[0]) key = 'chrome';
+    else if (!decisionAnswers[1]) key = 'curl';
+    else if (!decisionAnswers[2]) key = 'webfetch';
+    else key = 'unbrowser';
+  }
+  const r = REC[key];
+  document.getElementById('decision-opts').innerHTML = '<button class="decision-btn" onclick="resetDecision()">Start over</button>';
+  const result = document.getElementById('decision-result');
+  result.innerHTML = '<div class="rec-label">Recommended</div>'+
+    '<div class="rec-tool">'+r.tool+'</div>'+
+    '<div class="rec-reason">'+r.reason+'</div>';
+  result.classList.add('visible');
+}
+
+function resetDecision() {
+  decisionStep = 0;
+  decisionAnswers = [];
+  renderDecision();
+}
+
+// FULL TABLE
+function renderFullTable() {
+  const tools = ['curl','webfetch','unbrowser','playwright','puppeteer','browserbase'];
+  const headers = ['Tool','Category','Binary','RAM/Session','Cold Start','JS','Clicks','Cookies','Forms','Render','Stealth','Tokens/Page','Best For'];
+  const keys = ['name','cat','binaryMB','ramMB','coldMs','js','clicks','cookies','forms','render','stealth','tokens','best'];
+  
+  let html = '<thead><tr>'+headers.map(h => '<th>'+h+'</th>').join('')+'</tr></thead><tbody>';
+  html += tools.map(k => {
+    const t = TOOLS[k];
+    const highlight = k === 'unbrowser' ? 'highlight' : '';
+    return '<tr class="'+highlight+'">'+keys.map(key => {
+      let val = t[key];
+      if (key === 'binaryMB') val = val+' MB';
+      if (key === 'ramMB') val = val+' MB';
+      if (key === 'coldMs') val = (val/1000).toFixed(1)+'s';
+      if (key === 'tokens') val = val.toLocaleString();
+      const isNum = ['binaryMB','ramMB','coldMs','tokens'].includes(key);
+      return '<td'+(isNum?' class="num"':'')+'>'+val+'</td>';
+    }).join('')+'</tr>';
+  }).join('');
+  html += '</tbody>';
+  document.getElementById('full-table').innerHTML = html;
+}
+
+// === UPDATE ===
+function updateAll() {
+  state.sessions = +document.getElementById('sessions').value;
+  state.pages = +document.getElementById('pages').value;
+  state.tasks = +document.getElementById('tasks').value;
+  state.deploy = document.getElementById('deployment').value;
+  state.tool = document.getElementById('current-tool').value;
+  if (state.tool === 'other') state.tool = 'playwright';
+  state.llmCost = +document.getElementById('llm-cost').value;
+  
+  document.getElementById('sessions-val').textContent = state.sessions;
+  document.getElementById('pages-val').textContent = state.pages;
+  document.getElementById('tasks-val').textContent = fmt(state.tasks);
+  
+  renderPainCards();
+  renderChart('memory-chart', 'totalRam', 'Memory', fmtBytes);
+  renderChart('token-chart', 'totalTokens', 'Tokens', fmt);
+  renderProjection();
+  renderCapability(state.tool);
+  renderScale();
+  renderFullTable();
+}
+
+// === SCROLL REVEAL ===
+function setupReveal() {
+  const obs = new IntersectionObserver((entries) => {
+    entries.forEach(e => { if (e.isIntersecting) e.target.classList.add('visible'); });
+  }, { threshold:0.15 });
+  document.querySelectorAll('.reveal').forEach(el => obs.observe(el));
+}
+
+// === CAPABILITY CLICK ===
+function setupCapabilityClicks() {
+  document.querySelectorAll('.capability-table th[data-tool]').forEach(th => {
+    th.addEventListener('click', () => renderCapability(th.dataset.tool));
+  });
+}
+
+// === SCALE SLIDER ===
+function setupScale() {
+  const slider = document.getElementById('scale-slider');
+  slider.addEventListener('input', renderScaleDisplay);
+}
+
+// === INIT ===
+document.querySelectorAll('input,select').forEach(el => el.addEventListener('input', updateAll));
+renderPresets();
+renderDecision();
+setupReveal();
+setupCapabilityClicks();
+setupScale();
+updateAll();
+</script>
+</body>
+</html>
