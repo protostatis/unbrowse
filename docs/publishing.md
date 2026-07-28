@@ -11,7 +11,7 @@ It is intentionally separate from `skills/unbrowser/SKILL.md`, which is user-fac
 - crates.io (`unbrowser` crate): manual `cargo publish`
 - Homebrew tap: manual update of `protostatis/homebrew-tap`
 - ClawHub skill: manual `clawhub publish ...`
-- Official MCP Registry: manual `mcp-publisher publish`; v0.0.17 is prepared, not published
+- Official MCP Registry: manual `mcp-publisher publish`; v0.0.18 is prepared, not published
 
 ## GitHub Release + PyPI
 
@@ -71,7 +71,7 @@ Canonical skill page: `https://clawhub.ai/protostatis/skills/unbrowser`.
 
 ## Official MCP Registry
 
-Status for `0.0.17`: **prepared, not published**. The checked-in `server.json`
+Status for `0.0.18`: **prepared, not published**. The checked-in `server.json`
 declares the PyPI and crates.io packages only; it intentionally does not declare
 the hosted endpoint as a remote transport. Committing or merging this metadata
 has no Registry side effect.
@@ -82,14 +82,14 @@ deleting a listing does not make that version reusable.
 
 Owner-gated publish sequence:
 
-1. Run `python3 scripts/release_check.py --tag v0.0.17 --strict-skill`,
+1. Run `python3 scripts/release_check.py --tag v0.0.18 --strict-skill`,
    `python3 -m unittest discover -s tests -p 'test_release_check.py'`, and the
    build/test gates above.
-2. Publish and verify both underlying `0.0.17` packages first: `pyunbrowser` on
+2. Publish and verify both underlying `0.0.18` packages first: `pyunbrowser` on
    PyPI and `unbrowser` on crates.io. Their rendered package READMEs must expose
    `mcp-name: io.github.protostatis/unbrowser` before Registry publication.
    Also run the exact PyPI command derived from `server.json`,
-   `uvx pyunbrowser==0.0.17 --mcp`, through an MCP initialize/tools smoke test;
+   `uvx pyunbrowser==0.0.18 --mcp`, through an MCP initialize/tools smoke test;
    the `pyunbrowser` console-script alias exists specifically for this path.
 3. Run `mcp-publisher validate`. This is a manifest/schema check; it does not
    prove end-to-end package ownership, so a passing result is not permission to
@@ -100,7 +100,7 @@ Owner-gated publish sequence:
 5. Verify the exact published record with the read-only endpoint:
 
    ```bash
-   curl -fsS 'https://registry.modelcontextprotocol.io/v0.1/servers/io.github.protostatis%2Funbrowser/versions/0.0.17'
+   curl -fsS 'https://registry.modelcontextprotocol.io/v0.1/servers/io.github.protostatis%2Funbrowser/versions/0.0.18'
    ```
 
 Until step 4 succeeds, describe this channel only as **prepared, not published**.

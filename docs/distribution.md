@@ -22,7 +22,7 @@ Done:
 - `punkpeye/awesome-mcp-servers`: PR merged at `https://github.com/punkpeye/awesome-mcp-servers/pull/6860`.
 - crates.io: `unbrowser` v0.0.16 published at `https://crates.io/crates/unbrowser`.
 - Homebrew: `protostatis/homebrew-tap` updated to v0.0.16 at `https://github.com/protostatis/homebrew-tap`.
-- ClawHub: `unbrowser` skill v0.0.17 published at `https://clawhub.ai/protostatis/skills/unbrowser`.
+- ClawHub: `unbrowser` skill v0.0.18 published at `https://clawhub.ai/protostatis/skills/unbrowser`.
 
 Pending or blocked:
 
@@ -31,7 +31,7 @@ Pending or blocked:
 - `appcypher/awesome-mcp-servers`: branch pushed to `https://github.com/protostatis/awesome-mcp-servers/tree/add-unbrowser`; `gh pr create` failed with `CreatePullRequest` permissions. Manual compare URL: `https://github.com/appcypher/awesome-mcp-servers/compare/main...protostatis:add-unbrowser`.
 - Smithery exact namespace: UI created `protostatis-dev/unbrowser`; pursue `protostatis/unbrowser` only if exact namespace ownership matters.
 - Smithery verification: not verified yet. The checklist now passes successful release, homepage, and Smithery backlink; it still fails quality score because the score is exactly 80/100, exact-homepage-host TXT verification, and paid developer plan.
-- Official MCP Registry: package-only v0.0.17 metadata, ownership markers, and release pins are prepared in the repository, but nothing has been submitted. Publishing remains an explicit owner gate after both v0.0.17 packages exist publicly.
+- Official MCP Registry: package-only v0.0.18 metadata, ownership markers, and release pins are prepared in the repository, but nothing has been submitted. Publishing remains an explicit owner gate after both v0.0.18 packages exist publicly.
 
 One-liner:
 
@@ -124,7 +124,7 @@ Prepared Glama build settings for the next package release (not deployed):
   "pythonVersion": "3.14",
   "nodeVersion": "26",
   "buildSteps": [
-    "uv venv /opt/unbrowser --python 3.14 && VIRTUAL_ENV=/opt/unbrowser uv pip install pyunbrowser==0.0.17"
+    "uv venv /opt/unbrowser --python 3.14 && VIRTUAL_ENV=/opt/unbrowser uv pip install pyunbrowser==0.0.18"
   ],
   "cmdArguments": [
     "/opt/unbrowser/bin/unbrowser",
@@ -150,11 +150,11 @@ Latest hosted smoke result: Glama release `v0.1.2` built on `pyunbrowser==0.0.16
 
 Latest score result: Server Quality A, Server Coherence A, Tool Definition Quality A, Maintenance A, related servers present, and 32 of 32 tools scored.
 
-## v0.0.17 Release Preparation
+## v0.0.18 Release Preparation
 
-Status: prepared in source, not published. `Cargo.toml`, `Cargo.lock`, the Python package metadata/module, the root Dockerfile, and `server.json` are aligned at `0.0.17`. The existing ClawHub skill already uses `0.0.17`.
+Status: prepared in source, not published. `Cargo.toml`, `Cargo.lock`, the Python package metadata/module, the root Dockerfile, and `server.json` are aligned at `0.0.18`. The existing ClawHub skill already uses `0.0.18`.
 
-The Dockerfile and Glama build settings now target the next PyPI package. They cannot build successfully until `pyunbrowser==0.0.17` is public. Do not describe GitHub, PyPI, crates.io, Homebrew, Glama, or the Official MCP Registry as released at v0.0.17 until each external publish and its verification have completed.
+The Dockerfile and Glama build settings now target the next PyPI package. They cannot build successfully until `pyunbrowser==0.0.18` is public. Do not describe GitHub, PyPI, crates.io, Homebrew, Glama, or the Official MCP Registry as released at v0.0.18 until each external publish and its verification have completed.
 
 ## v0.0.16 Release
 
