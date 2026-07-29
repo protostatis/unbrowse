@@ -1000,7 +1000,8 @@ impl Session {
     }
 
     async fn navigate(&mut self, url: &str, exec_scripts: bool) -> Result<Value> {
-        self.navigate_with(self.http.get(url), exec_scripts, false).await
+        self.navigate_with(self.http.get(url), exec_scripts, false)
+            .await
     }
 
     /// Navigate with optional ascii blockmap for human debugging.
@@ -1750,10 +1751,8 @@ impl Session {
         // Strip the human-readable ASCII grid by default — it's redundant
         // with the JSON structure/headings/density fields and costs
         // ~500-8000 chars per page with zero agent utility.
-        if !include_ascii {
-            if let Some(obj) = blockmap.as_object_mut() {
-                obj.remove("ascii");
-            }
+        if !include_ascii && let Some(obj) = blockmap.as_object_mut() {
+            obj.remove("ascii");
         }
 
         let browser_route = challenge::detect_browser_route(status, &body, &blockmap);
@@ -1824,19 +1823,19 @@ impl Session {
                                     serde_json::to_string(hit).map(|s| s.len()).unwrap_or(0);
                                 if hit_size <= MAX_INLINE_EXTRACT_BYTES {
                                     let mut sub = json!({
-                                        "strategy": hit.get("strategy").cloned().unwrap_or(Value::Null),
-                                        "confidence": hit.get("confidence").cloned().unwrap_or(Value::Null),
-                                        "data": hit.get("data").cloned().unwrap_or(Value::Null),
-                                        "primary_truncated": {
-                                            "strategy": primary_strategy.clone(),
-                                            "confidence": primary_confidence.clone(),
-                                            "size_bytes": size,
-                                "hint": format!(
-                                    "primary \"{strat}\" ({size} bytes) exceeds {MAX_INLINE_EXTRACT_BYTES} byte inline cap; showing best fitting fallback. Call extract(strategy=\"{strat}\") for the full primary.",
-                                    strat = primary_strategy
-                                ),
-                                        },
-                                    });
+                                            "strategy": hit.get("strategy").cloned().unwrap_or(Value::Null),
+                                            "confidence": hit.get("confidence").cloned().unwrap_or(Value::Null),
+                                            "data": hit.get("data").cloned().unwrap_or(Value::Null),
+                                            "primary_truncated": {
+                                                "strategy": primary_strategy.clone(),
+                                                "confidence": primary_confidence.clone(),
+                                                "size_bytes": size,
+                                    "hint": format!(
+                                        "primary \"{strat}\" ({size} bytes) exceeds {MAX_INLINE_EXTRACT_BYTES} byte inline cap; showing best fitting fallback. Call extract(strategy=\"{strat}\") for the full primary.",
+                                        strat = primary_strategy
+                                    ),
+                                            },
+                                        });
                                     // Carry truncated all_hits summary for visibility.
                                     if let Some(map) = sub.as_object_mut() {
                                         let summary: Vec<Value> = hits.iter().map(|h| {
@@ -5901,7 +5900,9 @@ async fn navigate_cmd(args: &[String], command_i: usize) -> Result<()> {
     let shim_mode = parse_shim_mode_arg(args)?;
     let previous_events = EVENTS_ENABLED.swap(cli.events, Ordering::Relaxed);
     let mut session = Session::new(&profile, policy_block, shim_mode)?;
-    let result = session.navigate_opts(&cli.url, cli.exec_scripts, cli.include_ascii).await;
+    let result = session
+        .navigate_opts(&cli.url, cli.exec_scripts, cli.include_ascii)
+        .await;
     EVENTS_ENABLED.store(previous_events, Ordering::Relaxed);
     if cli.compact {
         println!("{}", serde_json::to_string(&result?)?);
@@ -6650,7 +6651,9 @@ async fn rpc_main(profile: Profile) -> Result<()> {
             }
             "blockmap" => match session.blockmap().map(|mut v| {
                 // Strip ASCII on standalone blockmap calls — same as navigate default
-                if let Some(obj) = v.as_object_mut() { obj.remove("ascii"); }
+                if let Some(obj) = v.as_object_mut() {
+                    obj.remove("ascii");
+                }
                 v
             }) {
                 Ok(v) => ok_response(id, v),
@@ -7304,7 +7307,9 @@ async fn dispatch_tool(session: &mut Session, name: &str, args: &Value) -> Resul
             session.query_text(text, selector, exact, limit)
         }
         "blockmap" => session.blockmap().map(|mut v| {
-            if let Some(obj) = v.as_object_mut() { obj.remove("ascii"); }
+            if let Some(obj) = v.as_object_mut() {
+                obj.remove("ascii");
+            }
             v
         }),
         "page_model" => {
