@@ -10,28 +10,29 @@ Breadcrumb name: `unbrowser by Unchained`
 
 ## Submission Status
 
-Updated: 2026-07-16
+Updated: 2026-08-02
 
 Done:
 
 - `mcp.so`: submission issue opened at `https://github.com/chatmcp/mcpso/issues/2500`; hosted endpoint follow-up posted in `https://github.com/chatmcp/mcpso/issues/2500#issuecomment-4538473171`.
-- `mcpservers.org`: free submission completed and resubmitted with contact email `protostatis.dev@gmail.com`; site reported successful submission and review within 12 hours.
 - Glama: accepted, claimed, author-verified, released at `https://glama.ai/mcp/servers/protostatis/unbrowser`, and related-server suggestions added.
 - Hosted Unchained MCP endpoint: deployed at `https://unchainedsky.com/unbrowser-mcp` for public discovery and smoke tests.
 - Smithery: published with `Unlisted` off at `https://smithery.ai/servers/protostatis-dev/unbrowser` using the hosted Unchained MCP endpoint; homepage/repository/license/backlink/icon are set.
 - `punkpeye/awesome-mcp-servers`: PR merged at `https://github.com/punkpeye/awesome-mcp-servers/pull/6860`.
-- crates.io: `unbrowser` v0.0.16 published at `https://crates.io/crates/unbrowser`.
-- Homebrew: `protostatis/homebrew-tap` updated to v0.0.16 at `https://github.com/protostatis/homebrew-tap`.
-- ClawHub: `unbrowser` skill v0.0.18 prepared at `https://clawhub.ai/protostatis/skills/unbrowser`.
+- GitHub Release: `v0.0.18` published at `https://github.com/protostatis/unbrowser/releases/tag/v0.0.18`.
+- PyPI: `pyunbrowser` v0.0.18 published at `https://pypi.org/project/pyunbrowser/`.
+- crates.io: `unbrowser` v0.0.18 published at `https://crates.io/crates/unbrowser`.
+- Homebrew: `protostatis/homebrew-tap` updated to v0.0.18 at `https://github.com/protostatis/homebrew-tap`.
+- ClawHub: `unbrowser` skill v0.0.18 published at `https://clawhub.ai/protostatis/skills/unbrowser`.
+- Official MCP Registry: `io.github.protostatis/unbrowser` v0.0.18 is active at `https://registry.modelcontextprotocol.io/v0.1/servers/io.github.protostatis%2Funbrowser/versions/0.0.18`.
 
 Pending or blocked:
 
-- `mcpservers.org`: public listing not yet visible after submissions.
+- `mcpservers.org`: the server-rendered listing is public and indexed, but a real browser still redirects its route to `/submit`. A correction request is pending separate owner review.
 - `ComposioHQ/awesome-claude-skills`: PR `https://github.com/ComposioHQ/awesome-claude-skills/pull/908` was closed by the owner account on 2026-07-03 without merge; do not reopen it without new owner direction.
 - `appcypher/awesome-mcp-servers`: branch pushed to `https://github.com/protostatis/awesome-mcp-servers/tree/add-unbrowser`; `gh pr create` failed with `CreatePullRequest` permissions. Manual compare URL: `https://github.com/appcypher/awesome-mcp-servers/compare/main...protostatis:add-unbrowser`.
 - Smithery exact namespace: UI created `protostatis-dev/unbrowser`; pursue `protostatis/unbrowser` only if exact namespace ownership matters.
 - Smithery verification: not verified yet. The checklist now passes successful release, homepage, and Smithery backlink; it still fails quality score because the score is exactly 80/100, exact-homepage-host TXT verification, and paid developer plan.
-- Official MCP Registry: package-only v0.0.18 metadata, ownership markers, and release pins are prepared in the repository, but nothing has been submitted. Publishing remains an explicit owner gate after both v0.0.18 packages exist publicly.
 
 One-liner:
 
@@ -150,11 +151,18 @@ Latest hosted smoke result: Glama release `v0.1.2` built on `pyunbrowser==0.0.16
 
 Latest score result: Server Quality A, Server Coherence A, Tool Definition Quality A, Maintenance A, related servers present, and 32 of 32 tools scored.
 
-## v0.0.18 Release Preparation
+## v0.0.18 Release
 
-Status: prepared in source, not published. `Cargo.toml`, `Cargo.lock`, the Python package metadata/module, the root Dockerfile, and `server.json` are aligned at `0.0.18`. The existing ClawHub skill already uses `0.0.18`.
+Released 2026-07-28. Distribution streams:
 
-The Dockerfile and Glama build settings now target the next PyPI package. They cannot build successfully until `pyunbrowser==0.0.18` is public. Do not describe GitHub, PyPI, crates.io, Homebrew, Glama, or the Official MCP Registry as released at v0.0.18 until each external publish and its verification have completed.
+- **GitHub Release**: binary tarballs for 4 platforms + SHA256 checksums at `https://github.com/protostatis/unbrowser/releases/tag/v0.0.18`
+- **PyPI**: `pip install pyunbrowser==0.0.18` — platform wheels bundling the native binary
+- **crates.io**: `cargo install unbrowser` — v0.0.18
+- **Homebrew**: `brew install protostatis/tap/unbrowser` — v0.0.18
+- **ClawHub**: skill v0.0.18 published at `https://clawhub.ai/protostatis/skills/unbrowser`
+- **Official MCP Registry**: active package-only record for `io.github.protostatis/unbrowser` v0.0.18
+- **Glama**: latest recorded hosted release remains v0.1.2 on `pyunbrowser==0.0.16`; the documented next build settings target `pyunbrowser==0.0.18`
+- **Smithery**: uses the hosted Unchained MCP endpoint and is not package-version-specific
 
 ## v0.0.16 Release
 
