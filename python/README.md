@@ -12,6 +12,8 @@ pip install pyunbrowser   # PyPI name; the import is `from unbrowser import ...`
 
 The wheel ships the native binary for your platform — there's nothing else to install.
 
+`unbrowser` is the lightweight browser tier from Unchained. [Run the live public-web demo](https://unchainedsky.com/unbrowser?utm_source=pypi&utm_medium=package&utm_campaign=pyunbrowser_readme&ref=pypi_live_demo) before installing; no account is required, and the demo accepts only the fixed public source sets shown on the page.
+
 For transparent bot-wall cookie handoff through local Chrome, install the optional solver extra:
 
 ```bash
