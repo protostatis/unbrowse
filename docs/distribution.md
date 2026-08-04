@@ -125,7 +125,7 @@ Prepared Glama build settings for the next package release (not deployed):
   "pythonVersion": "3.14",
   "nodeVersion": "26",
   "buildSteps": [
-    "uv venv /opt/unbrowser --python 3.14 && VIRTUAL_ENV=/opt/unbrowser uv pip install pyunbrowser==0.0.18"
+    "uv venv /opt/unbrowser --python 3.14 && VIRTUAL_ENV=/opt/unbrowser uv pip install pyunbrowser==0.0.19"
   ],
   "cmdArguments": [
     "/opt/unbrowser/bin/unbrowser",
@@ -161,7 +161,7 @@ Released 2026-07-28. Distribution streams:
 - **Homebrew**: `brew install protostatis/tap/unbrowser` — v0.0.18
 - **ClawHub**: skill v0.0.18 published at `https://clawhub.ai/protostatis/skills/unbrowser`
 - **Official MCP Registry**: active package-only record for `io.github.protostatis/unbrowser` v0.0.18
-- **Glama**: latest recorded hosted release remains v0.1.2 on `pyunbrowser==0.0.16`; the documented next build settings target `pyunbrowser==0.0.18`
+- **Glama**: latest recorded hosted release remains v0.1.2 on `pyunbrowser==0.0.16`; the documented next build settings target `pyunbrowser==0.0.19`
 - **Smithery**: uses the hosted Unchained MCP endpoint and is not package-version-specific
 
 ## v0.0.16 Release
