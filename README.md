@@ -12,6 +12,11 @@
 
 Try the [live public-web demo](https://unchainedsky.com/unbrowser?utm_source=github&utm_medium=repository&utm_campaign=unbrowser_readme&ref=readme_live_demo) before installing. It accepts only the fixed public source sets shown on the page; do not send private data, cookies, or authenticated tasks through it. A shared Streamable HTTP MCP endpoint is available at [`https://unchainedsky.com/unbrowser-mcp`](https://unchainedsky.com/unbrowser-mcp) for public smoke tests; production sessions should use a local install.
 
+Use `unbrowser` only on sites, accounts, and data you are permitted to access.
+Challenge detection and cookie import do not grant permission to bypass access
+controls or site terms. Treat session cookies as credentials: keep them local,
+scope them to the authorized task, and never send them to the public demo.
+
 ## Pick the right tier
 
 | Need | curl / WebFetch | unbrowser | Real Chrome |
@@ -21,7 +26,7 @@ Try the [live public-web demo](https://unchainedsky.com/unbrowser?utm_source=git
 | Client-side page scripts | ❌ | bounded QuickJS, opt-in | V8 |
 | Pixels, Canvas, WebGL, Workers, extensions | ❌ | ❌ | ✅ |
 | Agent-oriented output | DIY parsing | element refs, page signals, structured extraction | DIY CDP / DOM parsing |
-| Hard bot challenge | ❌ | detect + cookie replay | browser / human / solver |
+| Interactive access challenge | ❌ | detect + stop or escalate | authorized browser / human confirmation |
 
 Use `unbrowser` when HTTP alone is too dumb and a full browser is too expensive. When the page needs Chrome, the output tells the agent to escalate rather than pretending compatibility it does not have.
 
@@ -100,7 +105,7 @@ See [installation and interface reference](docs/usage.md#installation) for Cargo
 - **`navigate` returns a BlockMap**: page title, landmarks, headings, interactives, density signals, and an ASCII outline. Its size is page-dependent; it is structured for planning rather than a fixed-token promise.
 - **Stable element refs** (`e:142`): query an element once, then `click`, `type`, or `submit` it without re-parsing HTML.
 - **Stateful cookies and forms**: cookie jar, GET and URL-encoded POST form submission, links, and redirects persist within a session.
-- **Page and challenge signals**: `density.likely_js_filled`, `thin_shell`, and `challenge.provider` tell an agent whether to run scripts, inspect embedded data, replay a clearance cookie, or escalate.
+- **Page and challenge signals**: `density.likely_js_filled`, `thin_shell`, and `challenge.provider` tell an agent whether to run scripts, inspect embedded data, stop, or escalate to an authorized browser session.
 - **Structured helpers**: route discovery, card extraction, table normalization, `text_main`, and selector debugging cover common extraction workflows.
 
 ## Script mode and escalation
@@ -111,14 +116,14 @@ See [installation and interface reference](docs/usage.md#installation) for Cargo
 
 With `exec_scripts: true`, inline and external scripts run in QuickJS under a bounded watchdog. This can materialize light hydration and fetch-visible data; it is not V8 or a rendering engine. Heavy React/Vue/Ember apps may still leave an empty shell.
 
-Escalate to [`unchainedsky-cli`](https://github.com/protostatis/unchainedsky-cli) or [Unchained](https://unchainedsky.com) when a task needs real pixels, Canvas/WebGL, Workers, browser extensions, V8 compatibility, or active challenge solving. For many bot walls, solve once in Chrome and replay the resulting clearance cookie with `cookies_set` until it expires.
+Escalate to [`unchainedsky-cli`](https://github.com/protostatis/unchainedsky-cli) or [Unchained](https://unchainedsky.com) when a permitted task needs real pixels, Canvas/WebGL, Workers, browser extensions, V8 compatibility, an authenticated profile, or human confirmation. When the user has already established an authorized session in Chrome, `cookies_set` can import the required session cookie locally until it expires; it is not a license to circumvent a site's controls.
 
 ## Documentation
 
 | Need | Read |
 |---|---|
 | Install paths, session CLI, one-shot CLI, raw RPC, MCP, shims, full RPC table | [Usage reference](docs/usage.md) |
-| Script compatibility, SPA signals, challenge handling, cookie solver, escalation | [Compatibility and escalation](docs/compatibility.md) |
+| Script compatibility, SPA signals, challenge handling, authorized cookie handoff, escalation | [Compatibility and escalation](docs/compatibility.md) |
 | Distribution and supported directory listings | [Distribution notes](docs/distribution.md) |
 | Build the native binary | [Build instructions](docs/usage.md#build-from-source) |
 
