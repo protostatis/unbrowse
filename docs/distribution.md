@@ -10,7 +10,7 @@ Breadcrumb name: `unbrowser by Unchained`
 
 ## Submission Status
 
-Updated: 2026-08-02
+Updated: 2026-08-11
 
 Done:
 
@@ -19,12 +19,12 @@ Done:
 - Hosted Unchained MCP endpoint: deployed at `https://unchainedsky.com/unbrowser-mcp` for public discovery and smoke tests.
 - Smithery: published with `Unlisted` off at `https://smithery.ai/servers/protostatis-dev/unbrowser` using the hosted Unchained MCP endpoint; homepage/repository/license/backlink/icon are set.
 - `punkpeye/awesome-mcp-servers`: PR merged at `https://github.com/punkpeye/awesome-mcp-servers/pull/6860`.
-- GitHub Release: `v0.0.18` published at `https://github.com/protostatis/unbrowser/releases/tag/v0.0.18`.
-- PyPI: `pyunbrowser` v0.0.18 published at `https://pypi.org/project/pyunbrowser/`.
-- crates.io: `unbrowser` v0.0.18 published at `https://crates.io/crates/unbrowser`.
-- Homebrew: `protostatis/homebrew-tap` updated to v0.0.18 at `https://github.com/protostatis/homebrew-tap`.
-- ClawHub: `unbrowser` skill v0.0.18 published at `https://clawhub.ai/protostatis/skills/unbrowser`.
-- Official MCP Registry: `io.github.protostatis/unbrowser` v0.0.18 is active at `https://registry.modelcontextprotocol.io/v0.1/servers/io.github.protostatis%2Funbrowser/versions/0.0.18`.
+- GitHub Release: `v0.0.19` published at `https://github.com/protostatis/unbrowser/releases/tag/v0.0.19`.
+- PyPI: `pyunbrowser` v0.0.19 published at `https://pypi.org/project/pyunbrowser/`.
+- crates.io: `unbrowser` v0.0.19 published at `https://crates.io/crates/unbrowser`.
+- Homebrew: v0.0.18 remains live; the four-architecture v0.0.19 formula update is under owner review at `https://github.com/protostatis/homebrew-tap/pull/1`.
+- ClawHub: skill v0.0.18 remains live; the versioned source-card repair needed for a safe v0.0.19 publish is under owner review at `https://github.com/protostatis/unbrowser/pull/45`.
+- Official MCP Registry: `io.github.protostatis/unbrowser` v0.0.18 remains active. The v0.0.19 manifest is prepared in source but has not been published.
 
 Pending or blocked:
 
@@ -147,9 +147,22 @@ Hosted smoke checklist for each Glama release:
 7. Call `query` for `input[name=q]` and `form`, then `type` `wreq` into the input and `submit` the form.
 8. Expect the submit result to land on `https://hn.algolia.com/?q=wreq` with status `200`; `likely_js_filled: true` and sparse text there is expected because Algolia is an SPA shell.
 
-Latest hosted smoke result: Glama release `v0.1.2` built on `pyunbrowser==0.0.16` (`019f3405`), status: published. Previous: `v0.1.1` initialized `unbrowser` `0.0.14`, exposed 32 tools, navigated Hacker News, returned 30 `.titleline > a` links, typed into HN search, and submitted to Algolia successfully.
+Latest package-version-verified hosted smoke result: Glama release `v0.1.2` built on `pyunbrowser==0.0.16` (`019f3405`), status: published. On 2026-08-11, the anonymous directory surface reported repository release `0.1.4`, 32 tools, and A scores for license, quality, and maintenance, but did not expose the hosted `pyunbrowser` pin. Do not infer a hosted package upgrade from the repository release number. Previous: `v0.1.1` initialized `unbrowser` `0.0.14`, exposed 32 tools, navigated Hacker News, returned 30 `.titleline > a` links, typed into HN search, and submitted to Algolia successfully.
 
 Latest score result: Server Quality A, Server Coherence A, Tool Definition Quality A, Maintenance A, related servers present, and 32 of 32 tools scored.
+
+## v0.0.19 Release
+
+Released 2026-08-05. Distribution streams:
+
+- **GitHub Release**: binary tarballs for 4 platforms + SHA256 checksums at `https://github.com/protostatis/unbrowser/releases/tag/v0.0.19`
+- **PyPI**: `pip install pyunbrowser==0.0.19` — 4 platform wheels bundling the native binary
+- **crates.io**: `cargo install unbrowser` — v0.0.19
+- **Homebrew**: live tap remains v0.0.18; v0.0.19 is in owner-review PR `protostatis/homebrew-tap#1`
+- **ClawHub**: live skill remains v0.0.18; v0.0.19 source integrity is in owner-review PR `protostatis/unbrowser#45`
+- **Official MCP Registry**: active record remains v0.0.18; v0.0.19 is prepared, not published
+- **Glama**: latest package-version-verified hosted release remains v0.1.2 on `pyunbrowser==0.0.16`; the anonymous listing reports repository release `0.1.4` but not the hosted package pin
+- **Smithery**: uses the hosted Unchained MCP endpoint and is not package-version-specific
 
 ## v0.0.18 Release
 
@@ -212,13 +225,13 @@ Title: `unbrowser by Unchained`
 
 Subtitle: `Lightweight browser access for agents, by Unchained.`
 
-Release result: Smithery created `protostatis-dev/unbrowser`; deployment `17045078-887b-4e70-80c6-a13a550f8c5c` completed with `SUCCESS`, retrieved `serverInfo.name = "unbrowser"`, and found 32 tools. Follow-up deployment `5ece747a-2ef8-42f6-8af5-363889151826` also completed with `SUCCESS` after republishing the same hosted endpoint with an explicit empty config schema. Settings now show the Unchained landing page, GitHub repository, `Apache-2.0` license, same-domain backlink, custom icon, and `Unlisted` off. Current Smithery quality score shown by the UI is 80/100; verification requires greater than 80.
+Release result: Smithery created `protostatis-dev/unbrowser`; deployment `17045078-887b-4e70-80c6-a13a550f8c5c` completed with `SUCCESS`, retrieved `serverInfo.name = "unbrowser"`, and found 32 tools. Follow-up deployment `5ece747a-2ef8-42f6-8af5-363889151826` also completed with `SUCCESS` after republishing the same hosted endpoint with an explicit empty config schema. Settings now show the Unchained landing page, GitHub repository, `Apache-2.0` license, same-domain backlink, custom icon, and `Unlisted` off. On 2026-08-11, the public listing still showed 32 tools, a last deployment 14 days earlier, and a quality score of 80/100; verification requires greater than 80.
 
 Verification blockers: Smithery's public verification page currently marks successful release, homepage, and backlink as passing. It still marks quality score, exact-host TXT record for `unchainedsky.com`, and paid developer plan as incomplete. The latest scan log still warns that resources and prompts could not be listed. Local MCP stdio now advertises `resources`/`prompts` and returns empty arrays for `resources/list` and `prompts/list`; this needs a new packaged/deployed release before the hosted endpoint can remove those scan warnings.
 
-Latest hosted smoke result: production endpoint initializes MCP over both `/unbrowser-mcp` and `/unbrowser-mcp/mcp`, exposes 32 tools, navigates Hacker News successfully, blocks internal/private metadata targets with 403, and returns 404 for `/unbrowser-mcp/sse`. Verified by `python3 scripts/hosted_mcp_smoke.py`.
+Latest hosted smoke result: on 2026-08-11 the production endpoint initialized MCP over both `/unbrowser-mcp` and `/unbrowser-mcp/mcp`, exposed 32 tools, navigated Hacker News successfully, blocked internal/private metadata targets with 403, and returned 404 for `/unbrowser-mcp/sse`. Verified by `python3 scripts/hosted_mcp_smoke.py` after accepting both the legacy deployment-map status payload and the current bounded-capacity status payload.
 
-Version note: the hosted endpoint currently reports `serverInfo.version = "1.27.1"` because `mcp-proxy==0.12.0` constructs the proxied server with the upstream `serverInfo.name` but does not pass through the upstream `serverInfo.version`; the Python MCP SDK then defaults to its own package version. Fix options are to patch/vendor `mcp-proxy` to pass `version=response.serverInfo.version`, or replace the bridge with native Streamable HTTP support in `unbrowser`.
+Version note: the hosted endpoint reported `serverInfo.version = "1.29.0"` on 2026-08-11 because `mcp-proxy` constructs the proxied server with the upstream `serverInfo.name` but does not pass through the upstream `serverInfo.version`; the Python MCP SDK then defaults to its own package version. This value does not prove the hosted `unbrowser` package version. Fix options are to patch/vendor `mcp-proxy` to pass `version=response.serverInfo.version`, or replace the bridge with native Streamable HTTP support in `unbrowser`.
 
 ## Awesome List PRs
 
