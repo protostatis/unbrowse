@@ -90,12 +90,30 @@ def call_tool(endpoint: str, session_id: str, name: str, arguments: dict[str, An
     return json.loads(text)
 
 
+def status_payload_is_ready(payload: dict[str, Any]) -> bool:
+    """Accept the legacy deployment map and the current capacity contract."""
+    if payload.get("server_instances", {}).get("default") == "configured":
+        return True
+
+    active_sessions = payload.get("active_sessions")
+    capacity = payload.get("capacity")
+    return (
+        payload.get("status") == "ok"
+        and isinstance(active_sessions, int)
+        and not isinstance(active_sessions, bool)
+        and isinstance(capacity, int)
+        and not isinstance(capacity, bool)
+        and capacity > 0
+        and 0 <= active_sessions <= capacity
+    )
+
+
 def assert_status_endpoint(endpoint: str) -> None:
     status, _, body = request(endpoint.rstrip("/") + "/status", timeout=20)
     if status != 200:
         raise AssertionError(f"status endpoint returned HTTP {status}: {body[:300]}")
     parsed = json.loads(body)
-    if parsed.get("server_instances", {}).get("default") != "configured":
+    if not status_payload_is_ready(parsed):
         raise AssertionError(f"unexpected status payload: {parsed!r}")
 
 
