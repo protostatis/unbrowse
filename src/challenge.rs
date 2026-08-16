@@ -345,6 +345,14 @@ pub fn detect_browser_route(status: u16, body: &str, blockmap: &Value) -> Option
         .get("script_heavy_shell")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+    let body_text_chars = density
+        .get("body_text_chars")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let script_tags = density
+        .get("script_tags")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
     let interactives = blockmap.get("interactives").unwrap_or(&Value::Null);
     let links = interactives
         .get("links")
@@ -380,6 +388,33 @@ pub fn detect_browser_route(status: u16, body: &str, blockmap: &Value) -> Option
                 .count()
         })
         .unwrap_or(0);
+    let non_chrome_h1s = blockmap
+        .get("headings")
+        .and_then(|v| v.as_array())
+        .map(|headings| {
+            headings
+                .iter()
+                .filter(|heading| {
+                    heading.get("level").and_then(|v| v.as_u64()) == Some(1)
+                        && !heading
+                            .get("chrome")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false)
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let unresolved_primary_heading = non_chrome_h1s.len() == 1
+        && non_chrome_h1s[0]
+            .get("text")
+            .and_then(|v| v.as_str())
+            .is_some_and(is_loading_placeholder)
+        && body_text_chars <= 1_200
+        && script_tags >= 1
+        && structure_count <= 1
+        && links <= 10
+        && buttons == 0
+        && forms == 0;
     let raw_route_surface = has_raw_route_surface(&lower);
     let script_heavy_has_usable_content =
         script_heavy_shell && (main_heading_count > 0 || structure_count > 1 || links >= 20);
@@ -423,6 +458,9 @@ pub fn detect_browser_route(status: u16, body: &str, blockmap: &Value) -> Option
     ) {
         evidence.push("canvas_or_map_signature");
         ("canvas_or_map_ui", 0.86)
+    } else if unresolved_primary_heading {
+        evidence.push("blockmap.headings.primary_loading_placeholder");
+        ("primary_heading_unresolved", 0.86)
     } else if thin_shell {
         evidence.push("blockmap.density.thin_shell");
         ("thin_shell", 0.88)
@@ -457,6 +495,84 @@ pub fn detect_browser_route(status: u16, body: &str, blockmap: &Value) -> Option
         "evidence": evidence,
         "hint": "Route this page to real browser automation; unbrowser should not keep retrying the same response.",
     }))
+}
+
+/// Flag a requested fragment whose state is absent from the static response.
+///
+/// This does not claim that Chrome will resolve the state. It only prevents a
+/// fragment-driven request from silently succeeding when the returned HTML has
+/// no matching anchor target.
+pub fn detect_unresolved_fragment_route(
+    status: u16,
+    requested_url: &str,
+    target_present: bool,
+) -> Option<Value> {
+    if !(200..400).contains(&status) {
+        return None;
+    }
+    fragment_target_candidates(requested_url)?;
+    if target_present {
+        return None;
+    }
+
+    Some(json!({
+        "needed": true,
+        "reason": "unresolved_fragment_state",
+        "confidence": 0.74,
+        "evidence": ["requested_fragment_missing_from_static_dom"],
+        "hint": "The static result cannot verify the requested fragment state; verify it in Chrome or report it unresolved.",
+    }))
+}
+
+pub fn fragment_target_candidates(requested_url: &str) -> Option<Vec<String>> {
+    let parsed = url::Url::parse(requested_url).ok()?;
+    let encoded = parsed.fragment()?.trim();
+    if encoded.is_empty() {
+        return None;
+    }
+    let decoded = percent_decode_fragment(encoded)?;
+    if decoded.to_ascii_lowercase().starts_with(":~:text=") {
+        return None;
+    }
+    let mut candidates = vec![encoded.to_string()];
+    if decoded != encoded {
+        candidates.push(decoded);
+    }
+    Some(candidates)
+}
+
+fn is_loading_placeholder(text: &str) -> bool {
+    matches!(
+        text.trim().to_ascii_lowercase().as_str(),
+        "loading..." | "loading…"
+    )
+}
+
+fn percent_decode_fragment(fragment: &str) -> Option<String> {
+    let bytes = fragment.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            let high = hex_value(bytes[index + 1])?;
+            let low = hex_value(bytes[index + 2])?;
+            decoded.push((high << 4) | low);
+            index += 3;
+        } else {
+            decoded.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8(decoded).ok()
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
 }
 
 fn has_raw_route_surface(lower_body: &str) -> bool {
@@ -870,6 +986,216 @@ mod tests {
         assert!(
             route.is_none(),
             "usable SSR content should not force Chrome"
+        );
+    }
+
+    #[test]
+    fn browser_route_flags_unresolved_primary_loading_heading() {
+        let blockmap = json!({
+            "title": "Outdoor Odyssey Nomad Backpack",
+            "structure": [{"role": "nav"}],
+            "headings": [
+                {"level": 1, "text": "Loading...", "chrome": false},
+                {"level": 3, "text": "Product Details", "chrome": false}
+            ],
+            "interactives": {"links": 9, "buttons": 0, "inputs": [{}], "forms": []},
+            "density": {
+                "body_text_chars": 712,
+                "script_tags": 1,
+                "thin_shell": false,
+                "likely_js_filled": false,
+                "script_heavy_shell": false
+            }
+        });
+        let route = detect_browser_route(
+            200,
+            r#"<html><body><h1>Loading...</h1><h3>Product Details</h3><script src="app.js"></script></body></html>"#,
+            &blockmap,
+        )
+        .expect("unresolved primary heading should route");
+        assert_eq!(
+            route.get("reason").and_then(Value::as_str),
+            Some("primary_heading_unresolved")
+        );
+    }
+
+    #[test]
+    fn browser_route_ignores_hidden_loading_templates_on_complete_ssr_page() {
+        let blockmap = json!({
+            "title": "Complete product",
+            "structure": [{"role": "main"}, {"role": "article"}],
+            "headings": [{"level": 1, "text": "Complete product", "chrome": false}],
+            "interactives": {"links": 3, "buttons": 1, "inputs": [], "forms": []},
+            "density": {
+                "body_text_chars": 2400,
+                "script_tags": 1,
+                "thin_shell": false,
+                "likely_js_filled": false,
+                "script_heavy_shell": false
+            }
+        });
+        let route = detect_browser_route(
+            200,
+            r#"<html><body><main><h1>Complete product</h1><p>Useful content.</p></main><template><p>Loading...</p><p>Loading...</p></template><script src="app.js"></script></body></html>"#,
+            &blockmap,
+        );
+        assert!(route.is_none(), "hidden loading strings must not route");
+    }
+
+    #[test]
+    fn browser_route_ignores_nonprimary_loading_placeholders() {
+        let blockmap = json!({
+            "title": "Complete product",
+            "structure": [{"role": "main"}],
+            "headings": [{"level": 1, "text": "Complete product", "chrome": false}],
+            "interactives": {"links": 3, "buttons": 0, "inputs": [], "forms": []},
+            "density": {
+                "body_text_chars": 900,
+                "script_tags": 1,
+                "thin_shell": false,
+                "likely_js_filled": false,
+                "script_heavy_shell": false
+            }
+        });
+        let route = detect_browser_route(
+            200,
+            r#"<html><body><h1>Complete product</h1><p>Loading...</p><aside>Loading...</aside><script src="app.js"></script></body></html>"#,
+            &blockmap,
+        );
+        assert!(route.is_none(), "nonprimary placeholders must not route");
+    }
+
+    #[test]
+    fn browser_route_preserves_substantive_loading_article() {
+        let blockmap = json!({
+            "title": "Loading...",
+            "structure": [{"role": "article"}],
+            "headings": [{"level": 1, "text": "Loading...", "chrome": false}],
+            "interactives": {"links": 2, "buttons": 0, "inputs": [], "forms": []},
+            "density": {
+                "body_text_chars": 1201,
+                "script_tags": 1,
+                "thin_shell": false,
+                "likely_js_filled": false,
+                "script_heavy_shell": false
+            }
+        });
+        let route = detect_browser_route(
+            200,
+            r#"<html><body><article><h1>Loading...</h1><p>A complete article about loading cargo.</p></article><script src="analytics.js"></script></body></html>"#,
+            &blockmap,
+        );
+        assert!(
+            route.is_none(),
+            "substantive loading article must stay cheap"
+        );
+    }
+
+    #[test]
+    fn browser_route_requires_script_for_loading_heading() {
+        let blockmap = json!({
+            "title": "Loading...",
+            "structure": [{"role": "main"}],
+            "headings": [{"level": 1, "text": "Loading…", "chrome": false}],
+            "interactives": {"links": 2, "buttons": 0, "inputs": [], "forms": []},
+            "density": {
+                "body_text_chars": 700,
+                "script_tags": 0,
+                "thin_shell": false,
+                "likely_js_filled": false,
+                "script_heavy_shell": false
+            }
+        });
+        let route = detect_browser_route(
+            200,
+            "<html><body><main><h1>Loading…</h1><p>Static content.</p></main></body></html>",
+            &blockmap,
+        );
+        assert!(route.is_none(), "no-script loading heading must not route");
+    }
+
+    #[test]
+    fn browser_route_requires_exactly_one_non_chrome_h1() {
+        let blockmap = json!({
+            "title": "Loading...",
+            "structure": [{"role": "main"}],
+            "headings": [
+                {"level": 1, "text": "Loading...", "chrome": false},
+                {"level": 1, "text": "Product ready", "chrome": false}
+            ],
+            "interactives": {"links": 2, "buttons": 0, "inputs": [], "forms": []},
+            "density": {
+                "body_text_chars": 700,
+                "script_tags": 1,
+                "thin_shell": false,
+                "likely_js_filled": false,
+                "script_heavy_shell": false
+            }
+        });
+        let route = detect_browser_route(
+            200,
+            r#"<html><body><h1>Loading...</h1><h1>Product ready</h1><script src="app.js"></script></body></html>"#,
+            &blockmap,
+        );
+        assert!(route.is_none(), "multiple main H1s must not route");
+    }
+
+    #[test]
+    fn fragment_route_flags_absent_requested_state_conditionally() {
+        let route = detect_unresolved_fragment_route(
+            200,
+            "https://threejs.org/examples/#webgl_animation_keyframes",
+            false,
+        )
+        .expect("missing requested fragment should be unresolved");
+        assert_eq!(
+            route.get("reason").and_then(Value::as_str),
+            Some("unresolved_fragment_state")
+        );
+        let hint = route.get("hint").and_then(Value::as_str).unwrap_or("");
+        assert!(hint.contains("verify it in Chrome or report it unresolved"));
+    }
+
+    #[test]
+    fn fragment_route_preserves_existing_id_and_name_targets() {
+        assert!(
+            detect_unresolved_fragment_route(200, "https://example.com/report#details", true,)
+                .is_none()
+        );
+        assert!(
+            detect_unresolved_fragment_route(200, "https://example.com/report#legacy", true,)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn fragment_route_preserves_encoded_and_decoded_targets() {
+        assert_eq!(
+            fragment_target_candidates("https://example.com/report#section%20one"),
+            Some(vec!["section%20one".to_string(), "section one".to_string()])
+        );
+        assert!(
+            detect_unresolved_fragment_route(
+                200,
+                "https://example.com/report#section%20one",
+                true,
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn fragment_route_excludes_text_fragments_and_plain_urls() {
+        assert!(
+            detect_unresolved_fragment_route(
+                200,
+                "https://example.com/report#:~:text=useful%20sentence",
+                false,
+            )
+            .is_none()
+        );
+        assert!(
+            detect_unresolved_fragment_route(200, "https://example.com/report", false,).is_none()
         );
     }
 

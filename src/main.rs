@@ -999,8 +999,31 @@ impl Session {
         })
     }
 
+    fn fragment_target_present(&self, requested_url: &str) -> Option<bool> {
+        let candidates = challenge::fragment_target_candidates(requested_url)?;
+        let candidates_json = serde_json::to_string(&candidates).ok()?;
+        let code = format!(
+            "(function(){{ \
+                var targets = {candidates_json}; \
+                var all = document.getElementsByTagName('*'); \
+                for (var i = 0; i < all.length; i++) {{ \
+                    var id = all[i].getAttribute('id'); \
+                    var name = all[i].getAttribute('name'); \
+                    if (targets.indexOf(id) !== -1 || targets.indexOf(name) !== -1) return true; \
+                }} \
+                return false; \
+            }})()"
+        );
+        Some(
+            self.eval(&code)
+                .ok()
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false),
+        )
+    }
+
     async fn navigate(&mut self, url: &str, exec_scripts: bool) -> Result<Value> {
-        self.navigate_with(self.http.get(url), exec_scripts, false)
+        self.navigate_with(self.http.get(url), url, exec_scripts, false)
             .await
     }
 
@@ -1011,7 +1034,7 @@ impl Session {
         exec_scripts: bool,
         include_ascii: bool,
     ) -> Result<Value> {
-        self.navigate_with(self.http.get(url), exec_scripts, include_ascii)
+        self.navigate_with(self.http.get(url), url, exec_scripts, include_ascii)
             .await
     }
 
@@ -1023,6 +1046,7 @@ impl Session {
     async fn navigate_with(
         &mut self,
         req: wreq::RequestBuilder,
+        requested_url: &str,
         exec_scripts: bool,
         include_ascii: bool,
     ) -> Result<Value> {
@@ -1755,7 +1779,17 @@ impl Session {
             obj.remove("ascii");
         }
 
-        let browser_route = challenge::detect_browser_route(status, &body, &blockmap);
+        let fragment_target_present = self.fragment_target_present(requested_url);
+        let browser_route =
+            challenge::detect_browser_route(status, &body, &blockmap).or_else(|| {
+                fragment_target_present.and_then(|target_present| {
+                    challenge::detect_unresolved_fragment_route(
+                        status,
+                        requested_url,
+                        target_present,
+                    )
+                })
+            });
         self.last_challenge = challenge.clone();
         self.last_rate_limit = rate_limit.clone();
         self.last_browser_route = if challenge.is_none() && rate_limit.is_none() {
@@ -3343,7 +3377,7 @@ impl Session {
                     .post(&target_url)
                     .header("content-type", "application/x-www-form-urlencoded")
                     .body(body);
-                self.navigate_with(req, false, false).await
+                self.navigate_with(req, &target_url, false, false).await
             }
             other => Err(anyhow!("unsupported form method '{other}'")),
         }
@@ -7979,6 +8013,49 @@ mod shim_mode_tests {
         assert_eq!(
             density.get("script_heavy_shell").and_then(|v| v.as_bool()),
             Some(true)
+        );
+    }
+
+    #[test]
+    fn fragment_target_check_uses_the_seeded_dom_not_script_text() {
+        let profile = Profile::load(profile::DEFAULT_PROFILE).expect("default profile");
+        let session = Session::new(&profile, false, ShimMode::Stable).expect("session");
+        session
+            .eval(
+                r#"document.body.innerHTML = '<script>var example = "id=\\"details\\"";</script><section id="real-target"></section><a name="legacy"></a>'"#,
+            )
+            .expect("seed fragment targets");
+
+        assert_eq!(
+            session.fragment_target_present("https://example.com/#details"),
+            Some(false),
+            "an id-looking string inside a script is not a DOM target"
+        );
+        assert_eq!(
+            session.fragment_target_present("https://example.com/#real-target"),
+            Some(true)
+        );
+        assert_eq!(
+            session.fragment_target_present("https://example.com/#legacy"),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn fragment_target_check_accepts_decoded_existing_target() {
+        let profile = Profile::load(profile::DEFAULT_PROFILE).expect("default profile");
+        let session = Session::new(&profile, false, ShimMode::Stable).expect("session");
+        session
+            .eval(r#"document.body.innerHTML = '<section id="section one"></section>'"#)
+            .expect("seed encoded fragment target");
+        assert_eq!(
+            session.fragment_target_present("https://example.com/#section%20one"),
+            Some(true)
+        );
+        assert_eq!(
+            session.fragment_target_present("https://example.com/#:~:text=section%20one"),
+            None,
+            "text fragments are excluded from this detector"
         );
     }
 }
