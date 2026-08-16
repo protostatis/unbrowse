@@ -43,6 +43,20 @@ class RegistryManifestTests(unittest.TestCase):
         with self.assertRaisesRegex(SystemExit, "packages must match"):
             release_check.validate_registry_manifest(manifest, "0.0.19")
 
+    def test_clawhub_skill_card_matches_release_contract(self) -> None:
+        card_version = release_check.version_from_skill_card(
+            release_check.read("skills/unbrowser/skill-card.md")
+        )
+        self.assertEqual(card_version, "0.0.19")
+        release_check.validate_skill_versions("0.0.19", "0.0.19", card_version)
+
+    def test_clawhub_skill_card_version_drift_is_rejected(self) -> None:
+        with self.assertRaisesRegex(
+            SystemExit,
+            "skill card version '0.0.18' != binary version '0.0.19'",
+        ):
+            release_check.validate_skill_versions("0.0.19", "0.0.19", "0.0.18")
+
 
 if __name__ == "__main__":
     unittest.main()

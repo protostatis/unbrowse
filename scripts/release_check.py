@@ -41,6 +41,30 @@ def version_from_skill() -> str | None:
     return match.group(1) if match else None
 
 
+def version_from_skill_card(contents: str) -> str | None:
+    match = re.search(
+        r"^## Skill Version\(s\):(?:\s*<br>)?\s*\n([0-9]+\.[0-9]+\.[0-9]+)\s+\(source:",
+        contents,
+        re.M,
+    )
+    return match.group(1) if match else None
+
+
+def validate_skill_versions(
+    binary_version: str,
+    skill_version: str | None,
+    skill_card_version: str | None,
+) -> None:
+    require(
+        skill_version == binary_version,
+        f"skill version {skill_version!r} != binary version {binary_version!r}",
+    )
+    require(
+        skill_card_version == binary_version,
+        f"skill card version {skill_card_version!r} != binary version {binary_version!r}",
+    )
+
+
 def version_from_cargo_lock() -> str:
     lock = tomllib.loads(read("Cargo.lock"))
     matches = [
@@ -156,8 +180,9 @@ def main() -> int:
     )
 
     skill_version = version_from_skill()
+    skill_card_version = version_from_skill_card(read("skills/unbrowser/skill-card.md"))
     if args.strict_skill:
-        require(skill_version == version, f"skill version {skill_version!r} != binary version {version!r}")
+        validate_skill_versions(version, skill_version, skill_card_version)
 
     readme = read("README.md")
     usage = read("docs/usage.md")
@@ -208,7 +233,14 @@ def main() -> int:
     require(session_pos != -1, "docs/usage.md missing Session CLI section")
     require(bare_rpc_pos == -1 or session_pos < bare_rpc_pos, "usage reference should present Session CLI before raw JSON-RPC")
 
-    print({"version": version, "skill_version": skill_version, "ok": True})
+    print(
+        {
+            "version": version,
+            "skill_version": skill_version,
+            "skill_card_version": skill_card_version,
+            "ok": True,
+        }
+    )
     return 0
 
 
