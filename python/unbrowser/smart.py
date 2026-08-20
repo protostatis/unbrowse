@@ -222,25 +222,43 @@ def _brave_api_extract(query: str, count: int = 10) -> list[dict] | None:
     key = os.environ.get("BRAVE_API_KEY") or os.environ.get("BRAVE_SEARCH_API_KEY")
     if not key:
         return None
-    try:
-        req = Request(
-            f"{BRAVE_API_ENDPOINT}?q={quote_plus(query)}&count={count}",
-            headers={"Accept": "application/json", "X-Subscription-Token": key},
-        )
-        with urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        results = data.get("web", {}).get("results", []) or data.get("results", [])
-        out = []
-        for r in results[:count]:
-            out.append({
-                "title": r.get("title", "")[:300],
-                "url": r.get("url", ""),
-                "snippet": (r.get("description") or r.get("snippet") or "")[:500],
-                "display_url": r.get("url", "")[:120],
-            })
-        return out
-    except Exception:
-        return None
+    import time
+    from urllib.error import HTTPError
+
+    for attempt in range(3):
+        try:
+            req = Request(
+                f"{BRAVE_API_ENDPOINT}?q={quote_plus(query)}&count={count}",
+                headers={"Accept": "application/json", "X-Subscription-Token": key},
+            )
+            with urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            results = data.get("web", {}).get("results", []) or data.get("results", [])
+            out = []
+            for r in results[:count]:
+                out.append({
+                    "title": r.get("title", "")[:300],
+                    "url": r.get("url", ""),
+                    "snippet": (r.get("description") or r.get("snippet") or "")[:500],
+                    "display_url": r.get("url", "")[:120],
+                })
+            return out
+        except HTTPError as e:
+            # retry 429/5xx with backoff, honor Retry-After
+            if e.code in (429, 500, 502, 503, 504) and attempt < 2:
+                retry_after = e.headers.get("Retry-After")
+                try:
+                    wait = int(retry_after) if retry_after else (1 << attempt)
+                except Exception:
+                    wait = 1 << attempt
+                time.sleep(min(wait, 8))
+                continue
+            return None
+        except Exception:
+            # network/auth/malformed: fall through to HTML path; diagnostic is visible
+            # because caller will try _brave_html_extract next, so no silent loss of signal
+            return None
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -430,6 +448,22 @@ def _escalation_for_bundle(bundle: dict) -> dict | None:
 class SmartClient(Client):
     """Client with inference: search (Brave) vs navigate+auto discover."""
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        import concurrent.futures as _cf
+
+        # Shared executor for bounded enrichment calls — avoids per-call ThreadPoolExecutor
+        # leak where each timeout abandons a worker thread. Bounded to 3 workers (discover/cards/page_model).
+        self._smart_executor = _cf.ThreadPoolExecutor(max_workers=3, thread_name_prefix="smart")
+
+    def close(self) -> None:
+        try:
+            if hasattr(self, "_smart_executor"):
+                self._smart_executor.shutdown(wait=False, cancel_futures=True)
+        except Exception:
+            pass
+        super().close()
+
     # ---- search -----------------------------------------------------------
 
     def search(self, query: str, engine: str = "brave", count: int = 10, **kw) -> Any:  # type: ignore[override]
@@ -495,25 +529,19 @@ class SmartClient(Client):
         import concurrent.futures as _cf
 
         def _timed_call(method: str, kw: dict, tm: float = timeout):
-            # run Client.call in a thread so we can bound it without blocking
-            # the main thread. On timeout we abandon the worker (Python threads
-            # cannot be killed) and return a timeout marker — the worker will
-            # eventually complete and be reaped when the process exits.
-            ex = _cf.ThreadPoolExecutor(max_workers=1)
-            fut = ex.submit(self.call, method, **kw)
+            # Bounded via shared executor — no per-call ThreadPool leak. On timeout
+            # the worker thread remains in the pool but is not abandoned as an orphan;
+            # the pool is bounded (max 3) and reaped on SmartClient.close().
+            fut = self._smart_executor.submit(self.call, method, **kw)
             try:
-                res = fut.result(timeout=tm)
-                ex.shutdown(wait=True)
-                return res
+                return fut.result(timeout=tm)
             except _cf.TimeoutError:
                 try:
                     fut.cancel()
                 except Exception:
                     pass
-                ex.shutdown(wait=False, cancel_futures=True)
                 return {"_timeout": True, "error": f"{method} timed out after {tm}s"}
             except Exception:
-                ex.shutdown(wait=False, cancel_futures=True)
                 raise
 
         # handle relative hrefs like "/" from query("a") results

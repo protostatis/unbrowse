@@ -6439,19 +6439,31 @@ fn parse_profile_arg(args: &[String]) -> String {
     std::env::var("UNBROWSER_PROFILE").unwrap_or_else(|_| profile::DEFAULT_PROFILE.to_string())
 }
 
-fn parse_mcp_profile_arg(args: &[String]) -> String {
+fn parse_mcp_profile_arg(args: &[String]) -> Result<String> {
+    let mut raw: Option<String> = None;
     for (i, a) in args.iter().enumerate() {
         if a == "--mcp-profile" {
             if let Some(next) = args.get(i + 1) {
-                return next.to_ascii_lowercase();
+                raw = Some(next.to_ascii_lowercase());
+                break;
+            } else {
+                anyhow::bail!("--mcp-profile requires a value: minimal or full");
             }
         } else if let Some(rest) = a.strip_prefix("--mcp-profile=") {
-            return rest.to_ascii_lowercase();
+            raw = Some(rest.to_ascii_lowercase());
+            break;
         }
     }
-    std::env::var("UNBROWSER_MCP_PROFILE")
-        .map(|v| v.to_ascii_lowercase())
-        .unwrap_or_else(|_| "full".to_string())
+    if raw.is_none() {
+        if let Ok(v) = std::env::var("UNBROWSER_MCP_PROFILE") {
+            raw = Some(v.to_ascii_lowercase());
+        }
+    }
+    let v = raw.unwrap_or_else(|| "full".to_string());
+    if v != "minimal" && v != "full" {
+        anyhow::bail!("invalid --mcp-profile '{v}'. Expected minimal or full");
+    }
+    Ok(v)
 }
 
 // `--policy=blocklist` enables Tier 1 deterministic blocking at the
@@ -7670,7 +7682,7 @@ async fn mcp_main(profile: Profile) -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let policy_block = parse_policy_arg(&args);
     let shim_mode = parse_shim_mode_arg(&args)?;
-    let mcp_profile = parse_mcp_profile_arg(&args);
+    let mcp_profile = parse_mcp_profile_arg(&args)?;
     let mut session = Session::new(&profile, policy_block, shim_mode)?;
     let stdin = tokio::io::stdin();
     let mut reader = BufReader::new(stdin).lines();
