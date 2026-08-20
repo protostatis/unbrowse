@@ -6964,10 +6964,6 @@ async fn rpc_main(profile: Profile) -> Result<()> {
 // Tool surface = our RPC methods (everything except `close`, which is implicit).
 // =============================================================================
 
-fn mcp_tools() -> Value {
-    mcp_tools_for_profile("full")
-}
-
 fn mcp_tools_for_profile(profile: &str) -> Value {
     let minimal = profile == "minimal";
     let tools = json!([
@@ -7318,21 +7314,27 @@ fn mcp_tools_for_profile(profile: &str) -> Value {
         }
     ]);
     if minimal {
-        // Minimal profile: keep navigate (as open), extract, help — plus query so agents can probe selectors before escalating.
+        // Minimal profile: expose only the 4 core tools; help unlocks the rest.
         let allowed = ["navigate", "extract", "help", "query"];
-        if let Some(arr) = tools.as_array() {
-            let filtered: Vec<Value> = arr
-                .iter()
-                .filter(|t| allowed.contains(&t.get("name").and_then(|v| v.as_str()).unwrap_or("")))
-                .cloned()
-                .collect();
-            return json!(filtered);
-        }
+        let Some(arr) = tools.as_array() else {
+            return tools;
+        };
+        let filtered: Vec<Value> = arr
+            .iter()
+            .filter(|t| allowed.contains(&t.get("name").and_then(|v| v.as_str()).unwrap_or("")))
+            .cloned()
+            .collect();
+        return json!(filtered);
     }
     tools
 }
 
-async fn dispatch_tool(session: &mut Session, name: &str, args: &Value) -> Result<Value> {
+async fn dispatch_tool(
+    session: &mut Session,
+    name: &str,
+    args: &Value,
+    profile: &str,
+) -> Result<Value> {
     let str_arg = |k: &str| args.get(k).and_then(|v| v.as_str());
     match name {
         "navigate" => {
@@ -7541,12 +7543,14 @@ async fn dispatch_tool(session: &mut Session, name: &str, args: &Value) -> Resul
         }
         "help" => {
             let topic = args.get("topic").and_then(|v| v.as_str()).unwrap_or("");
-            let catalog = mcp_tools();
-            let tools = catalog.as_array().cloned().unwrap_or_default();
+            // Help reflects the ACTIVE profile: minimal agents see only the 4 exposed
+            // tools, full sees all 33. Progressive discovery stays honest.
+            let tools = mcp_tools_for_profile(profile);
+            let tools_arr = tools.as_array().cloned().unwrap_or_default();
             if topic.is_empty() {
-                // grouped catalog
+                // grouped catalog (names only, no schemas — full schemas come from tools/list)
                 let groups = json!({
-                    "core": ["navigate", "extract", "help"],
+                    "core": ["navigate", "extract", "help", "query"],
                     "query_text": ["query", "query_debug", "query_text", "find_text", "text_around"],
                     "reading": ["text", "text_main", "text_clean", "blockmap", "body"],
                     "discovery": ["page_model", "route_discover", "discover", "network_extract", "network_stores"],
@@ -7555,11 +7559,11 @@ async fn dispatch_tool(session: &mut Session, name: &str, args: &Value) -> Resul
                     "session": ["cookies_set", "cookies_get", "cookies_clear", "report_outcome", "network_stores_clear"]
                 });
                 Ok(
-                    json!({ "catalog": groups, "tools": tools, "note": "Minimal profile shows navigate/extract/help/query; help unlocks the rest. Use help(topic) to filter." }),
+                    json!({ "profile": profile, "catalog": groups, "tools": tools_arr, "note": "Help lists the tools available under the active profile. In minimal mode navigate/query/extract/help are callable; call help(topic) or switch to --mcp-profile full for the rest." }),
                 )
             } else {
                 let t = topic.to_ascii_lowercase();
-                let filtered: Vec<Value> = tools
+                let filtered: Vec<Value> = tools_arr
                     .into_iter()
                     .filter(|v| {
                         let name = v
@@ -7575,7 +7579,7 @@ async fn dispatch_tool(session: &mut Session, name: &str, args: &Value) -> Resul
                         name.contains(&t) || desc.contains(&t) || t == name
                     })
                     .collect();
-                Ok(json!({ "topic": topic, "tools": filtered }))
+                Ok(json!({ "profile": profile, "topic": topic, "tools": filtered }))
             }
         }
         _ => Err(anyhow!("unknown tool: {name}")),
@@ -7595,7 +7599,7 @@ async fn handle_session_request(
         return (ok_response(id, json!({ "ok": true })), false);
     }
     let prev = session.set_eval_deadline_from_now(dispatch_budget_ms);
-    let outcome = dispatch_tool(session, &req.method, &req.params).await;
+    let outcome = dispatch_tool(session, &req.method, &req.params, "full").await;
     session.restore_eval_deadline(prev);
     match outcome {
         Ok(value) => (ok_response(id, value), false),
@@ -7738,7 +7742,7 @@ async fn mcp_main(profile: Profile) -> Result<()> {
                 let arguments = params.get("arguments").cloned().unwrap_or(Value::Null);
                 // Same watchdog budget as the bare-RPC dispatcher.
                 let prev = session.set_eval_deadline_from_now(dispatch_budget_ms);
-                let outcome = dispatch_tool(&mut session, name, &arguments).await;
+                let outcome = dispatch_tool(&mut session, name, &arguments, &mcp_profile).await;
                 session.restore_eval_deadline(prev);
                 match outcome {
                     Ok(value) => {

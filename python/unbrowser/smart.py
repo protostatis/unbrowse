@@ -184,8 +184,7 @@ def _brave_html_extract(client: Client, query: str, count: int = 10) -> list[dic
     # Prefer structured JS extraction; fallback to generic link scan
     try:
         raw = client.eval(f"({_BRAVE_SNIPPET_JS})({{limit:{int(count)}}})")
-        # eval returns Python value already JSON-decoded if valid JSON string? But our JS returns JSON string.
-        # So raw may be a JSON string.
+        # eval returns either a JSON string (JS stringify) or a list (raw JS array).
         if isinstance(raw, str):
             try:
                 items = json.loads(raw)
@@ -529,9 +528,9 @@ class SmartClient(Client):
         import concurrent.futures as _cf
 
         def _timed_call(method: str, kw: dict, tm: float = timeout):
-            # Bounded via shared executor — no per-call ThreadPool leak. On timeout
-            # the worker thread remains in the pool but is not abandoned as an orphan;
-            # the pool is bounded (max 3) and reaped on SmartClient.close().
+            # Runs on the shared pool (bounded max_workers=3, reaped in close()).
+            # Python threads cannot be killed mid-run; timeout returns a marker and
+            # the worker thread eventually finishes and returns to the pool.
             fut = self._smart_executor.submit(self.call, method, **kw)
             try:
                 return fut.result(timeout=tm)
@@ -544,8 +543,9 @@ class SmartClient(Client):
             except Exception:
                 raise
 
-        # handle relative hrefs like "/" from query("a") results
-        url = _norm_url(url, self._last_url)
+        # handle relative hrefs like "/" from query("a") results; _last_url may be
+        # None before the first navigate, so pass an empty base (falls through to https://)
+        url = _norm_url(url, self._last_url or "")
         nav = super().navigate(url, exec_scripts=exec_scripts)
         bundle: dict[str, Any] = {
             "url": nav.get("url", url),

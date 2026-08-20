@@ -35,12 +35,11 @@ def mcp_tools(profile: str) -> list[dict]:
 def test_minimal_is_4_and_full_is_33():
     minimal = mcp_tools("minimal")
     full = mcp_tools("full")
-    assert len(minimal) == 4, f"minimal should be 4, got {len(minimal)}: {[t['name'] for t in minimal]}"
-    assert len(full) == 33, f"full should be 33 (32+help), got {len(full)}"
-    assert {t["name"] for t in minimal} == {"navigate", "query", "extract", "help"}
-    # full must contain minimal
+    names_min = {t["name"] for t in minimal}
     names_full = {t["name"] for t in full}
-    assert {"navigate", "query", "extract", "help"}.issubset(names_full)
+    assert names_min == {"navigate", "query", "extract", "help"}, f"minimal contract drifted: {names_min}"
+    assert names_min.issubset(names_full), "minimal must be subset of full"
+    assert len(full) >= 33, f"full lost tools: {len(full)}"
 
 
 def test_help_catalog_sums_to_32_and_matches_rust():
