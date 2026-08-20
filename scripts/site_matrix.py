@@ -146,12 +146,10 @@ def run_entry(entry: dict, timeout: float = 12.0) -> dict:
                 if exp.get("status") and out["status"] != exp["status"]:
                     out["error"] = f"status {out['status']} != {exp['status']}"
                 elif "escalation_reason" in exp and out["escalation"] != exp["escalation_reason"]:
-                    # informational partial_result is acceptable when expected None (auto-extract cap)
-                    if exp["escalation_reason"] is None and out["escalation"] in (None, "partial_result"):
+                    # informational partial_result/timeout when None expected is a warning, not a hard fail for canary
+                    if exp["escalation_reason"] is None and out["escalation"] in ("partial_result", "timeout"):
                         out["ok"] = True
-                    elif exp["escalation_reason"] is None and out["escalation"] == "timeout":
-                        # heavy DOM timeout is retryable, not a strict failure for harness canary
-                        out["ok"] = True
+                        out["warning"] = f"expected no escalation but got {out['escalation']} (informational, not strict failure)"
                     else:
                         out["error"] = f"escalation {out['escalation']} != {exp['escalation_reason']}"
                 else:
