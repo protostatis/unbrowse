@@ -320,13 +320,10 @@ def _next_tools_from_bundle(bundle: dict) -> list[dict]:
     """Build next_tools from navigate signals + tool_likelihoods."""
     nxt: list[dict] = []
     raw = bundle.get("raw") or {}
-    # tool_likelihoods from Rust (if present)
     recs = raw.get("tool_recommendations") or []
     likes = raw.get("tool_likelihoods") or {}
-    # prefer recommendations order
     for name in recs[:6]:
         nxt.append({"tool": name, "when": HELP_CATALOG.get("core", {}).get(name, {}).get("when") or "recommended", "confidence": float(likes.get(name, 0.7))})
-    # fallback if no recs
     if not nxt:
         bm = bundle.get("blockmap") or {}
         density = bm.get("density") or {}
@@ -338,107 +335,91 @@ def _next_tools_from_bundle(bundle: dict) -> list[dict]:
 
 
 def _escalation_for_bundle(bundle: dict) -> dict | None:
-    """Return escalation object or None. Always present when a retry/escalation is useful."""
+    """Portable escalation: stable reason + evidence + severity + retryable.
+
+    Rust emits facts (challenge, status, density, scripts, extract); Python maps
+    to host actions. This keeps reason codes stable and avoids phantom tools.
+    """
     status = bundle.get("status")
     challenge = bundle.get("challenge")
     bm = bundle.get("blockmap") or {}
     density = bm.get("density") or {}
     extract = bundle.get("extract") or {}
-    raw = bundle.get("raw") or {}
-    # 1. challenge
+    scripts = bundle.get("scripts") or {}
+
+    # 1. challenge / bot wall — portable fact from Rust
     if challenge:
         provider = challenge.get("provider") or challenge.get("vendor") or "unknown"
         return {
-            "reason": f"challenge_{provider}",
+            "reason": "challenge",
+            "category": "external_capability",
             "confidence": float(challenge.get("confidence", 0.9)) if isinstance(challenge.get("confidence"), (int, float)) else 0.9,
-            "hint": challenge.get("hint") or f"Bot wall {provider} detected. Use cookies_set with clearance cookie ({challenge.get('clearance_cookie') or 'unknown'}) or escalate to real Chrome.",
+            "severity": "high",
+            "retryable": False,
+            "evidence": {"provider": provider, "status": status, "clearance_cookie": challenge.get("clearance_cookie")},
+            "hint": "Continue using session state from a user-authorized browser, where permitted. Acquire a clearance cookie in real Chrome for this origin and replay via cookies_set.",
             "options": [
-                {"action": "replay_clearance_cookie", "tool": "cookies_set", "params": {"cookies": [{"name": challenge.get("clearance_cookie") or "_px3", "value": "<from Chrome>", "domain": urlparse(bundle.get("url") or "").hostname or "example.com"}]}},
-                {"action": "escalate_to_chrome", "tool": "chrome_escalation", "params": {"reason": provider}},
+                {"action": "replay_clearance_cookie", "tool": "cookies_set", "params": {"cookies": [{"name": challenge.get("clearance_cookie") or "_px3", "value": "<from user-authorized Chrome>", "domain": urlparse(bundle.get("url") or "").hostname or "example.com"}]}, "requires_user_confirmation": True},
+                {"action": "external_action", "external_action": "chrome_escalation", "reason": provider, "params": {"reason": provider}},
                 {"action": "try_help", "tool": "help", "params": {"topic": "session"}},
             ],
-            "next_tools": [{"tool": "cookies_set", "when": "replay Chrome cookie", "confidence": 0.9}, {"tool": "help", "when": "session", "confidence": 0.6}],
+            "next_tools": [{"tool": "cookies_set", "when": "replay user-authorized cookie", "confidence": 0.9}],
         }
-    # 2. http error
+    # 2. http errors — split per advisor
     if isinstance(status, int) and status >= 400:
-        return {
-            "reason": "http_error",
-            "confidence": 0.95,
-            "hint": f"HTTP {status} — page may be blocked or requires auth. Check challenge field.",
-            "options": [
-                {"action": "check_challenge", "tool": "help", "params": {"topic": "session"}},
-                {"action": "retry", "tool": "open", "params": {"url": bundle.get("url")}},
-            ],
-            "next_tools": [{"tool": "help", "when": "session", "confidence": 0.7}],
-        }
-    # 3. timeout
+        if status in (401, 403):
+            return {"reason": "auth_required", "category": "external_capability", "confidence": 0.95, "severity": "high", "retryable": False, "evidence": {"status": status}, "hint": f"HTTP {status} auth required or blocked. Acquire session state from a user-authorized browser if permitted.", "options": [{"action": "external_action", "external_action": "chrome_escalation", "reason": "auth"}, {"action": "try_help", "tool": "help", "params": {"topic": "session"}}], "next_tools": [{"tool": "help", "when": "session", "confidence": 0.7}]}
+        if status == 404:
+            return {"reason": "not_found", "category": "terminal", "confidence": 0.95, "severity": "low", "retryable": False, "evidence": {"status": status}, "hint": f"HTTP {status} not found — terminal, do not retry.", "options": [{"action": "try_help", "tool": "help", "params": {"topic": "discovery"}}], "next_tools": []}
+        if status == 429:
+            return {"reason": "rate_limited", "category": "retry", "confidence": 0.9, "severity": "medium", "retryable": True, "evidence": {"status": status}, "hint": f"HTTP {status} rate-limited. Back off and retry, or switch search provider (Brave→DDG fallback already handles this for search).", "options": [{"action": "retry_backoff", "tool": "open", "params": {"url": bundle.get("url")}}, {"action": "try_help", "tool": "help", "params": {"topic": "session"}}], "next_tools": [{"tool": "open", "when": "retry with backoff", "confidence": 0.6}]}
+        if status >= 500:
+            return {"reason": "server_error", "category": "retry", "confidence": 0.8, "severity": "medium", "retryable": True, "evidence": {"status": status}, "hint": f"HTTP {status} server error — retryable.", "options": [{"action": "retry", "tool": "open", "params": {"url": bundle.get("url")}}], "next_tools": [{"tool": "open", "when": "retry", "confidence": 0.6}]}
+        return {"reason": "http_error", "category": "retry", "confidence": 0.8, "severity": "medium", "retryable": True, "evidence": {"status": status}, "hint": f"HTTP {status} — check challenge field and retry.", "options": [{"action": "try_help", "tool": "help", "params": {"topic": "session"}}], "next_tools": [{"tool": "help", "when": "session", "confidence": 0.7}]}
+    # 3. timeout — enrichment bounded
     if bundle.get("discover_timeout") or bundle.get("cards_timeout") or bundle.get("page_model_timeout"):
         return {
             "reason": "timeout",
+            "category": "retry",
             "confidence": 0.7,
-            "hint": "Enrichment timed out (heavy DOM, 717 links on slickdeals homepage). Retry with smaller limits.",
+            "severity": "medium",
+            "retryable": True,
+            "evidence": {"discover_timeout": bool(bundle.get("discover_timeout")), "cards_timeout": bool(bundle.get("cards_timeout"))},
+            "hint": "Enrichment timed out (heavy DOM). Retry with smaller limits or skip discover.",
             "options": [
                 {"action": "retry_smaller", "tool": "open", "params": {"url": bundle.get("url"), "discover_limit": 3, "cards_limit": 3}},
                 {"action": "skip_discover", "tool": "extract_cards", "params": {"limit": 5}},
                 {"action": "try_help", "tool": "help", "params": {"topic": "extraction"}},
             ],
-            "next_tools": [{"tool": "extract_cards", "when": "cards only, no discover", "confidence": 0.7}],
+            "next_tools": [{"tool": "extract_cards", "when": "cards only", "confidence": 0.7}],
         }
-    # 4. js-gated (REI case) — likely_js_filled or scripts errors with empty title/h1
-    scripts = bundle.get("scripts") or {}
-    if density.get("likely_js_filled") or (scripts.get("errors") and not (bm.get("title") or "").strip()):
-        hint = "Client-rendered shell (REI price, ES-module). QuickJS can't run it (SyntaxError: export)."
-        if scripts.get("errors"):
-            hint += f" Script errors: {scripts['errors'][:1]}"
-        return {
-            "reason": "js_gated_price",
-            "confidence": 0.85,
-            "hint": hint,
-            "options": [
-                {"action": "extract_nuxt", "tool": "extract", "params": {"strategy": "nuxt_data"}},
-                {"action": "eval_inspect", "tool": "eval", "params": {"code": "document.documentElement.innerHTML.slice(0,2000)"}},
-                {"action": "escalate_to_chrome", "tool": "chrome_escalation", "params": {"reason": "ES-module"}},
-            ],
-            "next_tools": [{"tool": "extract", "when": "try nuxt_data / json_in_script", "confidence": 0.8}, {"tool": "eval", "when": "inspect window.__NUXT__", "confidence": 0.7}],
-        }
-    # 5. extract truncated (Slickdeals nuxt 227KB >16KB)
+    # 4. unsupported JS feature / thin shell — stable codes
+    if density.get("thin_shell"):
+        return {"reason": "thin_shell", "category": "continuation", "confidence": 0.7, "severity": "medium", "retryable": True, "evidence": {"thin_shell": True}, "hint": "SSR shell with little content — try exec_scripts or check embedded JSON.", "options": [{"action": "retry_exec_scripts", "tool": "open", "params": {"url": bundle.get("url"), "exec_scripts": True}}, {"action": "try_extract", "tool": "extract", "params": {}}], "next_tools": [{"tool": "extract", "when": "auto-strategy", "confidence": 0.7}]}
+    if density.get("likely_js_filled"):
+        return {"reason": "unsupported_js_feature", "category": "external_capability", "confidence": 0.85, "severity": "high", "retryable": False, "evidence": {"likely_js_filled": True, "script_errors": (scripts.get("errors") or [])[:2]}, "hint": "Client-rendered content requires JS features not supported by QuickJS (e.g. ES modules, import maps, WASM). Use extract for embedded JSON or escalate to real Chrome, where permitted.", "options": [{"action": "extract_alternate", "tool": "extract", "params": {"strategy": "json_in_script"}}, {"action": "external_action", "external_action": "chrome_escalation", "reason": "unsupported_js_feature"}], "next_tools": [{"tool": "extract", "when": "try json_in_script / nuxt_data", "confidence": 0.8}]}
+    # check ES-module specifically (REI case) even when likely_js_filled is false
+    errs = " ".join(str(e) for e in (scripts.get("errors") or []))
+    if "export" in errs or "import" in errs:
+        return {"reason": "unsupported_js_feature", "category": "external_capability", "confidence": 0.85, "severity": "high", "retryable": False, "evidence": {"script_errors": (scripts.get("errors") or [])[:2]}, "hint": "QuickJS cannot run ES-module bundles (export/import). Extract embedded data or use a real browser, where permitted.", "options": [{"action": "extract_alternate", "tool": "extract", "params": {"strategy": "nuxt_data"}}, {"action": "external_action", "external_action": "chrome_escalation", "reason": "ES-module"}], "next_tools": [{"tool": "extract", "when": "nuxt_data", "confidence": 0.8}]}
+    # 5. partial_result — supersedes old extract_truncated (informational, not escalation)
     if extract.get("primary_truncated"):
         pt = extract["primary_truncated"]
         return {
-            "reason": "extract_truncated",
+            "reason": "partial_result",
+            "category": "continuation",
             "confidence": 0.8,
+            "severity": "low",
+            "retryable": True,
+            "evidence": {"strategy": pt.get("strategy"), "size_bytes": pt.get("size_bytes")},
             "hint": f"Primary {pt.get('strategy')} {pt.get('size_bytes')} bytes exceeds inline cap; call extract(strategy=\"{pt.get('strategy')}\") for full.",
-            "options": [
-                {"action": "fetch_full_extract", "tool": "extract", "params": {"strategy": pt.get("strategy")}},
-                {"action": "try_help", "tool": "help", "params": {"topic": "extraction"}},
-            ],
+            "options": [{"action": "fetch_full_extract", "tool": "extract", "params": {"strategy": pt.get("strategy")}}, {"action": "try_help", "tool": "help", "params": {"topic": "extraction"}}],
             "next_tools": [{"tool": "extract", "when": f"strategy={pt.get('strategy')}", "confidence": 0.9}],
         }
-    # 6. thin shell
-    if density.get("thin_shell"):
-        return {
-            "reason": "thin_shell",
-            "confidence": 0.7,
-            "hint": "SSR shell with little content — try exec_scripts or check embedded JSON.",
-            "options": [
-                {"action": "retry_exec_scripts", "tool": "open", "params": {"url": bundle.get("url"), "exec_scripts": True}},
-                {"action": "try_extract", "tool": "extract", "params": {}},
-            ],
-            "next_tools": [{"tool": "extract", "when": "auto-strategy", "confidence": 0.7}],
-        }
-    # 7. cards miss on listing (e.g. slickdeals homepage nav cards, REI empty)
+    # 6. cards miss
     cards = bundle.get("cards")
     if isinstance(cards, list) and len(cards) == 0 and (density.get("li", {}) or {}).get("total", 0) > 20:
-        return {
-            "reason": "cards_miss",
-            "confidence": 0.6,
-            "hint": "extract_cards returned 0 but DOM has many li elements — try explicit extract_list or page_model.",
-            "options": [
-                {"action": "try_extract_list", "tool": "extract_list", "params": {"item_selector": "article", "fields": {"title": "h3"}}},
-                {"action": "try_page_model", "tool": "page_model", "params": {"goal": bundle.get("raw", {}).get("url", "")[:60]}},
-            ],
-            "next_tools": [{"tool": "extract_list", "when": "explicit fields", "confidence": 0.6}],
-        }
+        return {"reason": "cards_miss", "category": "continuation", "confidence": 0.6, "severity": "low", "retryable": True, "evidence": {"li_total": density.get("li", {}).get("total")}, "hint": "extract_cards returned 0 but DOM has many list items — try explicit selectors.", "options": [{"action": "try_extract_list", "tool": "extract_list", "params": {"item_selector": "article", "fields": {"title": "h3"}}}, {"action": "try_page_model", "tool": "page_model", "params": {}}], "next_tools": [{"tool": "extract_list", "when": "explicit fields", "confidence": 0.6}]}
     return None
 
 
@@ -514,15 +495,26 @@ class SmartClient(Client):
         import concurrent.futures as _cf
 
         def _timed_call(method: str, kw: dict, tm: float = timeout):
-            # run Client.call in a thread so we can bound it
-            with _cf.ThreadPoolExecutor(max_workers=1) as ex:
-                fut = ex.submit(self.call, method, **kw)
+            # run Client.call in a thread so we can bound it without blocking
+            # the main thread. On timeout we abandon the worker (Python threads
+            # cannot be killed) and return a timeout marker — the worker will
+            # eventually complete and be reaped when the process exits.
+            ex = _cf.ThreadPoolExecutor(max_workers=1)
+            fut = ex.submit(self.call, method, **kw)
+            try:
+                res = fut.result(timeout=tm)
+                ex.shutdown(wait=True)
+                return res
+            except _cf.TimeoutError:
                 try:
-                    return fut.result(timeout=tm)
-                except _cf.TimeoutError:
-                    return {"_timeout": True, "error": f"{method} timed out after {tm}s"}
-                except Exception as e:
-                    raise
+                    fut.cancel()
+                except Exception:
+                    pass
+                ex.shutdown(wait=False, cancel_futures=True)
+                return {"_timeout": True, "error": f"{method} timed out after {tm}s"}
+            except Exception:
+                ex.shutdown(wait=False, cancel_futures=True)
+                raise
 
         # handle relative hrefs like "/" from query("a") results
         url = _norm_url(url, self._last_url)
