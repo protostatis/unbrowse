@@ -247,6 +247,10 @@ class Client:
             bing  — Bing search. Tracker links in results are auto-decoded
                     on click (the binary detects bing.com/ck/a?u=... URLs
                     and follows to the real destination).
+            brave — Brave Search HTML via unbrowser. Prefer the SmartClient
+                    wrapper (``from unbrowser.smart import SmartClient``) for
+                    a parsed ``[{title,url,snippet}]`` result; this base
+                    method returns the raw navigate result for brave as well.
 
         Google is intentionally NOT supported via the cheap path — Google's
         search page returns ~no useful HTML without JS, so it would silently
@@ -260,9 +264,11 @@ class Client:
             url = "https://duckduckgo.com/html/?q=" + quote_plus(query)
         elif engine == "bing":
             url = "https://www.bing.com/search?q=" + quote_plus(query)
+        elif engine == "brave":
+            url = "https://search.brave.com/search?q=" + quote_plus(query) + "&source=web"
         else:
             raise UnbrowserError(
-                f"unknown search engine '{engine}'. Supported: ddg, bing. "
+                f"unknown search engine '{engine}'. Supported: ddg, bing, brave. "
                 "Google is intentionally unsupported via the cheap path."
             )
         return self.navigate(url)
