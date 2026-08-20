@@ -5798,7 +5798,10 @@ fn command_index(args: &[String], command: &str) -> Option<usize> {
         }
         if arg == "--profile" || arg == "--shims" || arg == "--mcp-profile" {
             i += 2;
-        } else if arg.starts_with("--profile=") || arg.starts_with("--shims=") || arg.starts_with("--mcp-profile=") {
+        } else if arg.starts_with("--profile=")
+            || arg.starts_with("--shims=")
+            || arg.starts_with("--mcp-profile=")
+        {
             i += 1;
         } else {
             i += 1;
@@ -7306,7 +7309,11 @@ fn mcp_tools_for_profile(profile: &str) -> Value {
         // Minimal profile: keep navigate (as open), extract, help — plus query so agents can probe selectors before escalating.
         let allowed = ["navigate", "extract", "help", "query"];
         if let Some(arr) = tools.as_array() {
-            let filtered: Vec<Value> = arr.iter().filter(|t| allowed.contains(&t.get("name").and_then(|v| v.as_str()).unwrap_or(""))).cloned().collect();
+            let filtered: Vec<Value> = arr
+                .iter()
+                .filter(|t| allowed.contains(&t.get("name").and_then(|v| v.as_str()).unwrap_or("")))
+                .cloned()
+                .collect();
             return json!(filtered);
         }
     }
@@ -7535,14 +7542,27 @@ async fn dispatch_tool(session: &mut Session, name: &str, args: &Value) -> Resul
                     "interaction": ["click", "activate", "type", "submit", "settle", "eval"],
                     "session": ["cookies_set", "cookies_get", "cookies_clear", "report_outcome", "network_stores_clear"]
                 });
-                Ok(json!({ "catalog": groups, "tools": tools, "note": "Minimal profile shows navigate/extract/help/query; help unlocks the rest. Use help(topic) to filter." }))
+                Ok(
+                    json!({ "catalog": groups, "tools": tools, "note": "Minimal profile shows navigate/extract/help/query; help unlocks the rest. Use help(topic) to filter." }),
+                )
             } else {
                 let t = topic.to_ascii_lowercase();
-                let filtered: Vec<Value> = tools.into_iter().filter(|v| {
-                    let name = v.get("name").and_then(|x| x.as_str()).unwrap_or("").to_ascii_lowercase();
-                    let desc = v.get("description").and_then(|x| x.as_str()).unwrap_or("").to_ascii_lowercase();
-                    name.contains(&t) || desc.contains(&t) || t == name
-                }).collect();
+                let filtered: Vec<Value> = tools
+                    .into_iter()
+                    .filter(|v| {
+                        let name = v
+                            .get("name")
+                            .and_then(|x| x.as_str())
+                            .unwrap_or("")
+                            .to_ascii_lowercase();
+                        let desc = v
+                            .get("description")
+                            .and_then(|x| x.as_str())
+                            .unwrap_or("")
+                            .to_ascii_lowercase();
+                        name.contains(&t) || desc.contains(&t) || t == name
+                    })
+                    .collect();
                 Ok(json!({ "topic": topic, "tools": filtered }))
             }
         }
