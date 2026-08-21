@@ -25,6 +25,7 @@ Done:
 - Homebrew: v0.0.18 remains live; the four-architecture v0.0.19 formula update is under owner review at `https://github.com/protostatis/homebrew-tap/pull/1`.
 - ClawHub: skill v0.0.18 remains live; the versioned source-card repair needed for a safe v0.0.19 publish is under owner review at `https://github.com/protostatis/unbrowser/pull/45`.
 - Official MCP Registry: `io.github.protostatis/unbrowser` v0.0.18 remains active. The v0.0.19 manifest is prepared in source but has not been published.
+- v0.0.20 is prepared in source (version bump + new release section below); publish pending tag `v0.0.20`.
 
 Pending or blocked:
 
@@ -150,6 +151,20 @@ Hosted smoke checklist for each Glama release:
 Latest package-version-verified hosted smoke result: Glama release `v0.1.2` built on `pyunbrowser==0.0.16` (`019f3405`), status: published. On 2026-08-11, the anonymous directory surface reported repository release `0.1.4`, 32 tools, and A scores for license, quality, and maintenance, but did not expose the hosted `pyunbrowser` pin. Do not infer a hosted package upgrade from the repository release number. Previous: `v0.1.1` initialized `unbrowser` `0.0.14`, exposed 32 tools, navigated Hacker News, returned 30 `.titleline > a` links, typed into HN search, and submitted to Algolia successfully.
 
 Latest score result: Server Quality A, Server Coherence A, Tool Definition Quality A, Maintenance A, related servers present, and 32 of 32 tools scored.
+
+## v0.0.20 Release
+
+Prepared 2026-08-21. Publish pending tag `v0.0.20`. Distribution streams:
+
+- **GitHub Release**: binary tarballs for 4 platforms + SHA256 checksums at `https://github.com/protostatis/unbrowser/releases/tag/v0.0.20` (created by the release workflow on tag)
+- **PyPI**: `pip install pyunbrowser==0.0.20` — platform wheels bundling the native binary
+- **crates.io**: `cargo install unbrowser` — v0.0.20
+- **Homebrew**: tap update to follow publish (v0.0.18 live)
+- **ClawHub**: skill source card bumped to 0.0.20 in source; publish follows tag
+- **Official MCP Registry**: `server.json` manifest bumped to 0.0.20 in source; publish follows tag
+- **Glama / Smithery / mcp.so**: hosted endpoint unaffected by version bump
+
+Highlights over 0.0.19: smart MCP surface (`search`/`open`/`help`) with calibrated `micro_hint`, `avoid`, and `tool_entropy` routing aids; clig.dev-style CLI discovery (`--help` groups, `help <topic>`, `search`/`open` subcommands, did-you-mean); MCP spec annotations and handshake `instructions`; Python packaging with `unbrowser-smart` console script.
 
 ## v0.0.19 Release
 

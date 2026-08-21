@@ -8,14 +8,14 @@
     "source": "github",
     "id": "1226093137"
   },
-  "version": "0.0.19",
+  "version": "0.0.20",
   "websiteUrl": "https://unchainedsky.com/unbrowser?ref=official_mcp_registry&utm_source=official_mcp_registry&utm_medium=mcp_directory&utm_campaign=unbrowser_registry_v0019_launch",
   "packages": [
     {
       "registryType": "pypi",
       "registryBaseUrl": "https://pypi.org",
       "identifier": "pyunbrowser",
-      "version": "0.0.19",
+      "version": "0.0.20",
       "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"
@@ -31,7 +31,7 @@
       "registryType": "cargo",
       "registryBaseUrl": "https://crates.io",
       "identifier": "unbrowser",
-      "version": "0.0.19",
+      "version": "0.0.20",
       "transport": {
         "type": "stdio"
       },

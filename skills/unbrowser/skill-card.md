@@ -40,7 +40,7 @@ Mitigation: Run only agent-authored diagnostic or extraction JavaScript and neve
 **Other Properties Related to Output:** [May propose unbrowser CLI commands, JSON-RPC requests, Python snippets, extraction strategy, escalation decisions, and safety guidance.] <br>
 
 ## Skill Version(s): <br>
-0.0.19 (source: server release metadata and SKILL.md frontmatter) <br>
+0.0.20 (source: server release metadata and SKILL.md frontmatter) <br>
 
 ## Ethical Considerations: <br>
 Users should evaluate whether this skill is appropriate for their environment, review any generated or modified files before relying on them, and apply their organization's safety, security, and compliance requirements before deployment. <br>
