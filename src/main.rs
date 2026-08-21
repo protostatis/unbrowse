@@ -5798,12 +5798,9 @@ fn command_index(args: &[String], command: &str) -> Option<usize> {
         }
         if arg == "--profile" || arg == "--shims" || arg == "--mcp-profile" {
             i += 2;
-        } else if arg.starts_with("--profile=")
-            || arg.starts_with("--shims=")
-            || arg.starts_with("--mcp-profile=")
-        {
-            i += 1;
         } else {
+            // Covers bare flags, `--flag=value` forms, and everything else:
+            // none of them consume the following token.
             i += 1;
         }
     }
@@ -6454,10 +6451,10 @@ fn parse_mcp_profile_arg(args: &[String]) -> Result<String> {
             break;
         }
     }
-    if raw.is_none() {
-        if let Ok(v) = std::env::var("UNBROWSER_MCP_PROFILE") {
-            raw = Some(v.to_ascii_lowercase());
-        }
+    if raw.is_none()
+        && let Ok(v) = std::env::var("UNBROWSER_MCP_PROFILE")
+    {
+        raw = Some(v.to_ascii_lowercase());
     }
     let v = raw.unwrap_or_else(|| "full".to_string());
     if v != "minimal" && v != "full" {
