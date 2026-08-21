@@ -6963,7 +6963,7 @@ async fn rpc_main(profile: Profile) -> Result<()> {
 
 fn mcp_tools_for_profile(profile: &str) -> Value {
     let minimal = profile == "minimal";
-    let tools = json!([
+    let mut tools = json!([
         {
             "name": "navigate",
             "description": "Fetch a URL with Chrome-fingerprinted HTTP using the active profile. Parses HTML, seeds the JS DOM, returns BlockMap inline. With `exec_scripts: true`, extracts inline AND external <script> tags from the parsed HTML, fetches externals in parallel (8s per-fetch timeout), eval's them in document order in QuickJS (with shims for setTimeout/fetch/etc.), then settles the event loop and fires DOMContentLoaded + load. `<script async>` is honored: async scripts execute after the sync queue. When `--policy=blocklist` is set, tracker URLs are blocked at script-fetch time (see scripts.policy_blocked in the result). Returns a `scripts` summary with inline_count, external_count, async_count, policy_blocked, executed, errors.\n\nAuto-extract: when the page embeds JSON-bearing <script> tags (density.json_scripts > 0 — covers application/json, application/ld+json, text/x-magento-init, text/x-shopify-app, etc.), navigate auto-runs `extract()` and returns the result as the `extract` field. Saves a round trip on the common case where the data the JS would have rendered is already sitting in the HTML — JSON-LD article schemas on news sites, __NEXT_DATA__ page state on Next.js apps, json_in_script product blobs on Magento/Shopify, GitHub RSC payloads, etc. Capped at 16 KB inline; over that limit `extract` returns a stub with strategy/confidence/size_bytes/hint and the agent should call `extract()` explicitly to retrieve the full payload. Pages with no embedded JSON get extract:null and pay zero extra cost.\n\nTool advice: navigate also returns `tool_likelihoods` plus `tool_recommendations`, derived from concrete page signals (structure/headings, selector hints, density, embedded data, network captures, challenge state, and script pathology) so agents can pick the next tool without guessing.\n\nAuto-solve: Reddit's JS proof-of-work challenge (provider: reddit_js_challenge) is transparently solved — the challenge is detected, the GET solution URL is computed (solution = hex_value + hex_value), and the real page is returned in one navigate call. challenge:null on the result means the real page was served. Subsequent navigations in the same session carry the clearance cookie and skip the challenge entirely.",
@@ -7310,6 +7310,17 @@ fn mcp_tools_for_profile(profile: &str) -> Value {
             }
         }
     ]);
+    // Attach spec annotations + display titles to every tool before profile
+    // filtering, so both profiles advertise them.
+    if let Some(arr) = tools.as_array_mut() {
+        for t in arr.iter_mut() {
+            if let Some(name) = t.get("name").and_then(|v| v.as_str()).map(|s| s.to_string())
+                && let Some(obj) = t.as_object_mut()
+            {
+                obj.insert("annotations".to_string(), mcp_tool_annotations(&name));
+            }
+        }
+    }
     if minimal {
         // Minimal profile: expose only the 4 core tools; help unlocks the rest.
         let allowed = ["navigate", "extract", "help", "query"];
@@ -7324,6 +7335,46 @@ fn mcp_tools_for_profile(profile: &str) -> Value {
         return json!(filtered);
     }
     tools
+}
+
+/// MCP tool annotations (spec 2025-03-26+). The spec defaults are pessimistic —
+/// an unannotated tool is assumed destructive AND open-world, so hosts prompt
+/// "are you sure?" for plain reads. Annotate every tool explicitly.
+///
+/// Three tiers:
+///   read       — analysis of the current page/captures; no state change
+///   action     — mutates session/DOM or reaches the network, non-destructive
+///   destructive— clears accumulated state
+fn mcp_tool_annotations(name: &str) -> Value {
+    // (title, read_only, destructive, idempotent, open_world)
+    let (title, ro, destr, idem, open): (&str, bool, bool, bool, bool) = match name {
+        "navigate" => ("Fetch page", false, false, true, true),
+        "click" => ("Click element", false, false, false, true),
+        "activate" => ("Probe element", false, false, false, true),
+        "type" => ("Type text", false, false, true, false),
+        "submit" => ("Submit form", false, false, false, true),
+        "eval" => ("Run JavaScript", false, false, false, true),
+        "settle" => ("Settle event loop", false, false, true, false),
+        "cookies_set" => ("Import cookies", false, false, true, false),
+        "report_outcome" => ("Report outcome", false, false, false, false),
+        "cookies_clear" => ("Clear cookie jar", false, true, true, false),
+        "network_stores_clear" => ("Clear captures", false, true, true, false),
+        "help" => ("Tool catalog", true, false, true, false),
+        _ => {
+            // Everything else is analysis of the already-fetched page:
+            // query*, text*, find_text, blockmap, page_model, discover,
+            // route_discover, extract*, table_to_json, body, cookies_get,
+            // network_stores, network_extract.
+            (name, true, false, true, false)
+        }
+    };
+    json!({
+        "title": title,
+        "readOnlyHint": ro,
+        "destructiveHint": destr,
+        "idempotentHint": idem,
+        "openWorldHint": open,
+    })
 }
 
 async fn dispatch_tool(
@@ -7579,7 +7630,39 @@ async fn dispatch_tool(
                 Ok(json!({ "profile": profile, "topic": topic, "tools": filtered }))
             }
         }
-        _ => Err(anyhow!("unknown tool: {name}")),
+        _ => {
+            // Teaching error: suggest close names so a typo'd tool call
+            // corrects in one round-trip instead of failing twice.
+            let catalog = mcp_tools_for_profile("full");
+            let names: Vec<String> = catalog
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|t| t.get("name").and_then(|v| v.as_str()).map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let lower = name.to_ascii_lowercase();
+            let near: Vec<&str> = names
+                .iter()
+                .filter(|n| {
+                    let nl = n.to_ascii_lowercase();
+                    nl.contains(&lower) || (lower.len() > 3 && nl.starts_with(&lower[..3]))
+                })
+                .map(|n| n.as_str())
+                .take(4)
+                .collect();
+            if near.is_empty() {
+                Err(anyhow!(
+                    "unknown tool: {name}. Call help(topic) for the grouped catalog."
+                ))
+            } else {
+                Err(anyhow!(
+                    "unknown tool: {name}. Did you mean: {}? Or call help(topic) for the full catalog.",
+                    near.join(", ")
+                ))
+            }
+        }
     }
 }
 
@@ -7726,9 +7809,11 @@ async fn mcp_main(profile: Profile) -> Result<()> {
                 "capabilities": { "tools": {}, "resources": {}, "prompts": {} },
                 "serverInfo": {
                     "name": "unbrowser",
+                    "title": "unbrowser — web access for LLM agents",
                     "version": env!("CARGO_PKG_VERSION"),
                     "shim_mode": shim_mode.as_str()
-                }
+                },
+                "instructions": "Start with navigate: it returns a BlockMap plus tool_recommendations and tool_likelihoods ranking which tools fit this page. Results may carry micro_hint (the single next concrete step), next_tools (ranked candidates), avoid (tools with nothing to act on), and escalation (bot-wall/challenge guidance). When query returns [], call query_debug before guessing selectors. For bot-walled sites, replay a clearance cookie from the user's browser via cookies_set."
             })),
             "ping" => Ok(json!({})),
             "tools/list" => Ok(json!({ "tools": mcp_tools_for_profile(&mcp_profile) })),

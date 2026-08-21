@@ -23,6 +23,7 @@ from .smart import SmartClient, HELP_CATALOG
 TOOLS = [
     {
         "name": "search",
+        "title": "Web search",
         "description": "Brave HTML search (DDG fallback, optional BRAVE_API_KEY) -> [{title,url,snippet,display_url}]. Minimal entry 1.",
         "inputSchema": {
             "type": "object",
@@ -32,10 +33,12 @@ TOOLS = [
             },
             "required": ["query"],
         },
+        "annotations": {"title": "Web search", "readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True},
     },
     {
         "name": "open",
-        "description": "Fetch URL + bounded auto-discover (discover/cards) + stable escalation (partial_result/thin_shell/etc.) and next_tools. Minimal entry 2 (navigate as open).",
+        "title": "Open page",
+        "description": "Fetch URL + bounded auto-discover (discover/cards) + stable escalation (partial_result/thin_shell/etc.), next_tools, avoid, micro_hint. Minimal entry 2 (navigate as open).",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -46,10 +49,12 @@ TOOLS = [
             },
             "required": ["url"],
         },
+        "annotations": {"title": "Open page", "readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True},
     },
     {
         "name": "help",
-        "description": "Progressive discovery: grouped catalog of all 32 tools. Minimal shows search/open/extract/help; help unlocks the rest. help(topic) to filter.",
+        "title": "Tool catalog",
+        "description": "Progressive discovery: grouped catalog of all 32 tools with when to use and example. help(topic) to filter.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -57,8 +62,20 @@ TOOLS = [
             },
             "required": [],
         },
+        "annotations": {"title": "Tool catalog", "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
     },
 ]
+
+# Cross-tool guidance delivered to the model at handshake (MCP InitializeResult
+# `instructions` field — read by Claude/ChatGPT/Codex hosts).
+SERVER_INSTRUCTIONS = (
+    "Start with open(url): the bundle carries blockmap, discover routes, cards, "
+    "next_tools (ranked candidates), avoid (tools with nothing to act on), and "
+    "micro_hint (the single next concrete step). Follow micro_hint when present; "
+    "when tool_entropy marks the page ambiguous, gather information (query_debug/"
+    "text_main) instead of committing to a tool. For bot-walled sites, replay a "
+    "clearance cookie from the user's browser via cookies_set."
+)
 
 _client: Optional[SmartClient] = None
 
@@ -85,7 +102,21 @@ def handle_tools_call(name: str, args: dict) -> Any:
         from .smart import _help_catalog
 
         return _help_catalog(args.get("topic"))
-    raise ValueError(f"unknown tool: {name}")
+    # Teaching error: suggest close names so a typo'd call corrects in one
+    # round-trip instead of failing twice.
+    import difflib
+
+    known = [t["name"] for t in TOOLS] + [n for fam in ("query", "reading", "extraction", "discovery", "interaction", "session") for n in (
+        {"query": ["query", "query_debug", "query_text", "find_text", "text_around"],
+         "reading": ["text", "text_main", "text_clean", "blockmap", "body"],
+         "extraction": ["extract_table", "extract_list", "extract_cards", "table_to_json"],
+         "discovery": ["discover", "route_discover", "page_model", "network_extract", "network_stores"],
+         "interaction": ["click", "type", "submit", "activate", "settle"],
+         "session": ["cookies_set", "cookies_get", "cookies_clear", "report_outcome"]}[fam]
+    )]
+    near = difflib.get_close_matches(name, known, n=3)
+    hint = f" Did you mean: {', '.join(near)}?" if near else ""
+    raise ValueError(f"unknown tool: {name}.{hint} Call help(topic) for the catalog.")
 
 
 def main() -> None:
@@ -111,7 +142,8 @@ def main() -> None:
                 result = {
                     "protocolVersion": "2025-06-18",
                     "capabilities": {"tools": {}},
-                    "serverInfo": {"name": "unbrowser-smart", "version": PKG_VERSION},
+                    "serverInfo": {"name": "unbrowser", "title": "unbrowser — web access for LLM agents", "version": PKG_VERSION},
+                    "instructions": SERVER_INSTRUCTIONS,
                 }
             elif method == "ping":
                 result = {}
