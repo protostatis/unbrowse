@@ -195,6 +195,7 @@ def test_find_binary_prefers_freshest_local_build(tmp_path):
     os.utime(old_bundled, (1_000_000,) * 2)
 
     real_file = unbrowser.__file__
+    real_path_pos = sys.path.index(str(REPO / "python"))
     unbrowser.__file__ = str(pkg / "__init__.py")
     try:
         release = fake_bin(repo / "target" / "release" / "unbrowser")
@@ -210,3 +211,4 @@ def test_find_binary_prefers_freshest_local_build(tmp_path):
         assert unbrowser.find_binary() == str(debug), "fresh debug must win overall"
     finally:
         unbrowser.__file__ = real_file
+        sys.path.pop(real_path_pos)

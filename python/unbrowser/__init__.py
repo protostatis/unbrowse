@@ -78,15 +78,17 @@ def find_binary() -> str:
     # package importable without an installed wheel, while PATH may contain the
     # pip-generated `unbrowser` console wrapper. Prefer the real local binary.
     # (python/unbrowser/__init__.py -> python/unbrowser -> python -> repo root).
+    name = _binary_name()
     candidates: list[tuple[float, str, Path]] = []
-    bundled = Path(__file__).parent / "_bin" / _binary_name()
-    if bundled.is_file():
-        candidates.append((bundled.stat().st_mtime, "bundled binary", bundled))
-    dev_root = Path(__file__).resolve().parents[2] / "target"
-    for profile in ("release", "debug"):
-        dev = dev_root / profile / "unbrowser"
-        if dev.is_file():
-            candidates.append((dev.stat().st_mtime, f"target/{profile}/unbrowser", dev))
+    for source, path in (
+        ("bundled binary", Path(__file__).parent / "_bin" / name),
+        ("target/release/" + name, Path(__file__).resolve().parents[2] / "target" / "release" / name),
+        ("target/debug/" + name, Path(__file__).resolve().parents[2] / "target" / "debug" / name),
+    ):
+        try:
+            candidates.append((path.stat().st_mtime, source, path))
+        except OSError:
+            continue  # not present; single stat avoids is_file/stat TOCTOU
     if candidates:
         _, source, path = max(candidates, key=lambda c: c[0])
         return _checked_binary(path, source)
