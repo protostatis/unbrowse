@@ -787,3 +787,51 @@ This work is a specific instance of a more general claim about LLM-driven system
 > Most performance engineering today uses hand-tuned heuristics where a real probabilistic policy would do better. The constraint that justified hand-tuning (microsecond budgets, no idle time) doesn't bind in LLM-driven workflows because the LLM itself is the slow part. Everything below the LLM has spare budget for inference that previous-generation systems couldn't afford.
 
 unbrowser is one place to demonstrate this pattern. If it works here, the same shape — frequentist hot path, Bayesian policy layer, persistent priors per workload class — applies to many systems-level decisions in LLM-adjacent infrastructure.
+
+---
+
+## 13. Tool-invocation routing (the same frame, one layer up)
+
+The posteriors above decide what *unbrowser* does internally (run scripts?
+settle? call an API?). The identical math governs the other half of the
+system: which tool the *agent* reaches for next. Every agent decision is
+
+```
+P(call T next | evidence)
+```
+
+and each layer of the stack is one update:
+
+| Update | Mechanism | Owner |
+|---|---|---|
+| Prior | tool name + description (training-data semantics) | us, at design time |
+| Prior shift | MCP `instructions` field at handshake | server |
+| Evidence | `derive_tool_likelihoods()` — page features → per-tool scores | binary |
+| Posterior | `next_tools[]` with confidences | smart layer |
+| MAP estimate | `micro_hint` | smart layer |
+| Suppression | `avoid[]` — hard-absence evidence zeroes mass | smart layer |
+| Ambiguity | `tool_entropy.h` — flat distribution ⇒ "gather info", not argmax | smart layer |
+| New label | `report_outcome` binds success/failure to navigation_id | driver |
+
+Design rules that fall out (all shipped in the smart layer as of 0.0.20-dev):
+
+1. **Calibration beats correctness.** A hint that fires when it shouldn't
+   trains agents to ignore hints. Every advisory branch gates on positive
+   evidence (a table is data only with ≥8 `<td>` cells; a layout table on a
+   docs page must not route to `extract_table`).
+2. **Negative advice saves more than positive advice.** Each avoided call is
+   a full round-trip plus failed-parse cost. `avoid[]` emits only on hard
+   structural absence (no JSON scripts, no tables, no forms), never
+   speculation.
+3. **Suppress argmax under ambiguity.** When the next_tools distribution is
+   flat (normalized entropy > 0.85), `micro_hint` is withheld and the bundle
+   says so — argmax over noise is how hints lose trust.
+4. **Phase B closes the loop.** `report_outcome` labels feed a Beta-Bernoulli
+   per `(page_shape_bucket × tool)` pair; hand-tuned likelihood weights
+   become learned ones. Same sample-efficiency argument as Appendix B: two
+   inspectable parameters per cell, no RL.
+
+The name/description prior is why tool naming is a probabilistic decision,
+not an aesthetic one (`open` routes intent better than `navigate_auto`) —
+but priors are the *smallest* lever we control. The evidence, suppression,
+and calibration layers are where the accuracy actually comes from.
