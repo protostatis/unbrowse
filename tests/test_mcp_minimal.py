@@ -69,6 +69,40 @@ def test_help_catalog_sums_to_32_and_matches_rust():
     # (spot-check: help catalog's next_tools should be real tools)
 
 
+def test_micro_hint_fixtures():
+    sys.path.insert(0, str(REPO / "python"))
+    from unbrowser.smart import _micro_hint_for_bundle
+
+    # tables -> extract_table
+    b = {"status": 200, "blockmap": {"density": {"tables": {"total": 3}}, "headings": []}, "cards": [], "discover": {}, "raw": {}}
+    h = _micro_hint_for_bundle(b)
+    assert h and h["tool"] == "extract_table" and "table" in h["selector"]
+
+    # forms -> type
+    b = {"status": 200, "blockmap": {"density": {"tables": None}, "headings": []}, "cards": [], "discover": {"forms": [{"label": "Search", "controls": [{"ref": "e:1"}]}]}, "raw": {}}
+    h = _micro_hint_for_bundle(b)
+    assert h and h["tool"] == "type"
+
+    # headings no cards -> query_text
+    b = {"status": 200, "blockmap": {"density": {"tables": None}, "headings": [{"text": "Premarket Trading August 20"}]}, "cards": [], "discover": {}, "raw": {}}
+    h = _micro_hint_for_bundle(b)
+    assert h and h["tool"] == "query_text"
+
+    # li heavy no cards -> extract_list
+    b = {"status": 200, "blockmap": {"density": {"tables": None, "li": {"total": 60}}, "headings": []}, "cards": [], "discover": {}, "raw": {}}
+    h = _micro_hint_for_bundle(b)
+    assert h and h["tool"] == "extract_list"
+
+    # json scripts -> extract
+    b = {"status": 200, "blockmap": {"density": {"tables": None, "json_scripts": 2}, "headings": []}, "cards": [], "discover": {}, "raw": {}}
+    h = _micro_hint_for_bundle(b)
+    assert h and h["tool"] == "extract"
+
+    # rich page (cards present) -> no hint needed
+    b = {"status": 200, "blockmap": {"density": {"tables": None}, "headings": [{"text": "x"}]}, "cards": [{"title": "a"}], "discover": {}, "raw": {}}
+    assert _micro_hint_for_bundle(b) is None
+
+
 def test_escalation_fixtures():
     sys.path.insert(0, str(REPO / "python"))
     from unbrowser.smart import _escalation_for_bundle

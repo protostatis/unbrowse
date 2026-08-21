@@ -440,6 +440,60 @@ def _escalation_for_bundle(bundle: dict) -> dict | None:
     return None
 
 
+def _micro_hint_for_bundle(bundle: dict) -> dict | None:
+    """Derive a concrete selector/next-step from signals already in the bundle.
+
+    When auto-discovery (cards/discover) comes up empty but the page has usable
+    DOM facts (tables, forms, li, json scripts), give the agent an immediate,
+    specific micro-step instead of forcing it to re-scan. Zero extra network calls.
+    """
+    bm = bundle.get("blockmap") or {}
+    density = bm.get("density") or {}
+    discover = bundle.get("discover") or {}
+    headings = bm.get("headings") or []
+    # 1. tables
+    tables = density.get("tables") or {}
+    if isinstance(tables, dict) and tables.get("total", 0) > 0:
+        return {
+            "tool": "extract_table",
+            "selector": "table",
+            "reason": f"{tables.get('total')} table element(s) in the DOM; run extract_table (or query 'table tbody tr') for the premarket/finance rows.",
+        }
+    # 2. search forms (discover found them)
+    forms = discover.get("forms") or []
+    if forms:
+        f = forms[0]
+        return {
+            "tool": "type",
+            "selector": f.get("controls", [{}])[0].get("ref") or "form input",
+            "reason": f"Search form found ('{f.get('label','')}') — type a query then submit to navigate it.",
+        }
+    # 3. headings but no cards: text is present, just narrow
+    if len(headings) > 0 and not (bundle.get("cards") or []):
+        h = headings[0].get("text", "") if isinstance(headings[0], dict) else ""
+        return {
+            "tool": "query_text",
+            "selector": "body",
+            "reason": f"No repeated cards, but headings exist (e.g. '{h[:40]}') — use text_main or query_text on the content root.",
+        }
+    # 4. lots of <li> but cards failed
+    li = density.get("li") or {}
+    if isinstance(li, dict) and li.get("total", 0) > 20 and not (bundle.get("cards") or []):
+        return {
+            "tool": "extract_list",
+            "selector": "li",
+            "reason": f"{li.get('total')} list items present but extract_cards found none — try extract_list with an explicit item_selector.",
+        }
+    # 5. embedded JSON is the fastest path
+    if density.get("json_scripts", 0) > 0:
+        return {
+            "tool": "extract",
+            "selector": "json_ld",
+            "reason": f"{density.get('json_scripts')} JSON-bearing script tag(s); call extract() or eval a parser for structured data.",
+        }
+    return None
+
+
 # ---------------------------------------------------------------------------
 # SmartClient
 # ---------------------------------------------------------------------------
@@ -610,6 +664,12 @@ class SmartClient(Client):
         esc = _escalation_for_bundle(bundle)
         bundle["escalation"] = esc
         bundle["next_tools"] = esc.get("next_tools", []) if esc else _next_tools_from_bundle(bundle)
+        # micro_hint: concrete selector/next-step when auto-discovery came up short,
+        # so the agent doesn't have to re-scan the DOM. Always attached to a failure
+        # path (or when cards are empty on an information-rich page).
+        micro = _micro_hint_for_bundle(bundle)
+        if micro is not None:
+            bundle["micro_hint"] = micro
         return bundle
 
     # ---- infer ------------------------------------------------------------
