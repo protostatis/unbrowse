@@ -162,6 +162,7 @@ Prepared 2026-08-21. Publish pending tag `v0.0.20`. Distribution streams:
 - **Homebrew**: tap update to follow publish (v0.0.18 live)
 - **ClawHub**: skill source card bumped to 0.0.20 in source; publish follows tag
 - **Official MCP Registry**: `server.json` manifest bumped to 0.0.20 in source; publish follows tag
+- **GHCR**: `ghcr.io/protostatis/unbrowser:v0.0.20` (+ `0.0.20`, then serialized `:latest` promotion) — multi-arch linux/amd64 + linux/arm64 distroless image, built by the release workflow's `publish-ghcr` job from the prebuilt Linux binaries, with MCP-init / navigate / nonroot smoke gates before push
 - **Glama / Smithery / mcp.so**: hosted endpoint unaffected by version bump
 
 Highlights over 0.0.19: smart MCP surface (`search`/`open`/`help`) with calibrated `micro_hint`, `avoid`, and `tool_entropy` routing aids; clig.dev-style CLI discovery (`--help` groups, `help <topic>`, `search`/`open` subcommands, did-you-mean); MCP spec annotations and handshake `instructions`; Python packaging with `unbrowser-smart` console script.
