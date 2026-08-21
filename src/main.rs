@@ -7314,7 +7314,10 @@ fn mcp_tools_for_profile(profile: &str) -> Value {
     // filtering, so both profiles advertise them.
     if let Some(arr) = tools.as_array_mut() {
         for t in arr.iter_mut() {
-            if let Some(name) = t.get("name").and_then(|v| v.as_str()).map(|s| s.to_string())
+            if let Some(name) = t
+                .get("name")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
                 && let Some(obj) = t.as_object_mut()
             {
                 obj.insert("annotations".to_string(), mcp_tool_annotations(&name));
@@ -7638,7 +7641,11 @@ async fn dispatch_tool(
                 .as_array()
                 .map(|a| {
                     a.iter()
-                        .filter_map(|t| t.get("name").and_then(|v| v.as_str()).map(|s| s.to_string()))
+                        .filter_map(|t| {
+                            t.get("name")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string())
+                        })
                         .collect()
                 })
                 .unwrap_or_default();
