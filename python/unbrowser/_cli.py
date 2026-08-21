@@ -5,12 +5,17 @@ Registered in pyproject.toml as `[project.scripts] unbrowser = ...`, so
 agents and MCP hosts can use directly (e.g. `command: "unbrowser"` in
 .mcp.json).
 
-The wrapper keeps the native binary as the execution engine and exposes a
-useful `--help` surface. Invocations are passed through to the binary.
+The wrapper keeps the native binary as the execution engine. Help follows
+progressive-disclosure conventions (clig.dev): `--help` shows the core path
+plus grouped tool families; `unbrowser help <topic>` drills into any family
+or tool; unknown commands get did-you-mean suggestions on stderr with
+exit code 2.
 """
 
 from __future__ import annotations
 
+import difflib
+import json
 import os
 import subprocess
 import sys
@@ -19,40 +24,135 @@ from pathlib import Path
 from . import find_binary
 
 
+# Grouped tool families — mirrors HELP_CATALOG in unbrowser/smart.py and the
+# Rust MCP surface. Kept as plain data so `--help` renders without importing
+# the smart layer.
+TOOL_FAMILIES: dict[str, list[str]] = {
+    "reading": ["text", "text_main", "text_clean", "blockmap", "body"],
+    "query": ["query", "query_debug", "query_text", "find_text", "text_around"],
+    "extraction": ["extract", "extract_table", "extract_list", "extract_cards", "table_to_json"],
+    "discovery": ["discover", "route_discover", "page_model", "network_extract", "network_stores"],
+    "interaction": ["click", "type", "submit", "activate", "settle", "eval"],
+    "session": ["cookies_set", "cookies_get", "cookies_clear", "report_outcome"],
+}
+
+_KNOWN_COMMANDS = [
+    "navigate", "search", "open", "help", "exec", "session",
+    "router", "cookie-service", "policy-check", "--mcp", "--version",
+    "--list-profiles", "--prefit-info",
+]
+
+
 def _usage() -> None:
+    fams = "\n".join(f"  {fam:<12} {' '.join(tools)}" for fam, tools in TOOL_FAMILIES.items())
     print(
-        """unbrowser
+        f"""unbrowser — web access for LLM agents. One static binary. No Chrome.
 
-Usage:
-  unbrowser session start [--id <id>] [--profile <name>] [--policy=blocklist] [--shims stable|enhanced]
-  unbrowser session exec [--pretty] <id|socket> <method> [params-json | shorthand args]
+START HERE
+  unbrowser navigate <url> [--exec-scripts]    fetch a page -> low-token BlockMap
+  unbrowser search "<query>" [--count N]       web search (Brave->DDG) -> [{{title,url,snippet}}]
+  unbrowser open <url> [--goal G]              fetch + auto-discover + next-step hints
+  unbrowser --mcp                              MCP server mode for agent hosts
+
+MULTI-STEP SESSIONS (cookies + last page persist)
+  unbrowser session start [--id <id>] [--profile <name>] [--policy=blocklist]
   unbrowser exec [--pretty] <id|socket> <method> [params-json | shorthand args]
-  unbrowser session stop <id|socket>
-  unbrowser session list
-  unbrowser session prune
-  unbrowser navigate <url> [--exec-scripts] [--json] [--events] [--shims stable|enhanced]
-  unbrowser router <url> [--cookie-service <url>] [--allow-remote-cookie-service] [--no-auto-cookie-service]
-  unbrowser cookie-service [--headless|--no-headless] [--port <port>] [--allow-host <host>] [--allow-remote-bind]
+  unbrowser session stop <id|socket> | session list | session prune
+
+TOOLS — call via `unbrowser exec <id> <method> '{{...}}'`, or over MCP
+{fams}
+
+  unbrowser help <family|tool>    details + examples (e.g. `unbrowser help extraction`)
+
+MORE
+  unbrowser router <url>                 bot-wall cookie handoff via local Chrome
+  unbrowser cookie-service [--headless]  local solver service (needs [solver] extra)
   unbrowser policy-check <url> [<url>...]
-  unbrowser --list-profiles
-  unbrowser --prefit-info
-  unbrowser [--profile <name>] [--policy=blocklist] [--shims stable|enhanced] [--mcp]
-  unbrowser --version
+  unbrowser --list-profiles | --prefit-info | --version
 
-Examples:
-  unbrowser session start --id demo
-  unbrowser exec demo navigate https://news.ycombinator.com
-  unbrowser exec --pretty demo blockmap
-  unbrowser session stop demo
-  unbrowser navigate https://news.ycombinator.com --json
-  unbrowser cookie-service --headless --profile unbrowser-cookie-service
-  unbrowser router https://example.com/protected
-  unbrowser policy-check https://www.bbc.com/news
-  printf '{\"id\":1,\"method\":\"navigate\",\"params\":{\"url\":\"https://news.ycombinator.com\"}}\n' | unbrowser
-
-`navigate` delegates to the native binary; output is always the binary's JSON.
+Every result carries routing hints: micro_hint (the next concrete step),
+next_tools (ranked candidates), avoid (tools with nothing to act on).
 """
     )
+
+
+def _help_topic(topic: str | None) -> int:
+    """Render the grouped catalog, one family, or one tool. Exit 0."""
+    try:
+        from .smart import HELP_CATALOG
+    except ImportError:
+        print("help catalog unavailable in this install", file=sys.stderr)
+        return 1
+    if not topic:
+        for fam, tools in HELP_CATALOG.items():
+            print(f"{fam}:")
+            for name, info in tools.items():
+                print(f"  {name:<16} {info.get('when', '')}")
+        print("\nDrill in: unbrowser help <family|tool>  e.g. unbrowser help extract_table")
+        return 0
+    t = topic.lower()
+    for fam, tools in HELP_CATALOG.items():
+        if t == fam:
+            print(f"{fam}:")
+            for name, info in tools.items():
+                print(f"\n  {name}\n    {info.get('when', '')}")
+                if info.get("example"):
+                    print(f"    e.g. {info['example']}")
+            return 0
+        if t in tools:
+            info = tools[t]
+            print(f"{t}  ({fam})\n  {info.get('when', '')}")
+            if info.get("example"):
+                print(f"  e.g. {info['example']}")
+            return 0
+    # fuzzy fallback
+    matches = difflib.get_close_matches(t, [n for f_ in HELP_CATALOG.values() for n in f_], n=3)
+    if matches:
+        print(f"unknown topic '{topic}'. Did you mean: {', '.join(matches)}?")
+    else:
+        print(f"unknown topic '{topic}'")
+    return 1
+
+
+def _suggest_and_exit(bad: str) -> None:
+    matches = difflib.get_close_matches(bad, _KNOWN_COMMANDS + [n for f_ in TOOL_FAMILIES.values() for n in f_], n=3)
+    hint = f" Did you mean: {', '.join(matches)}?" if matches else ""
+    print(f"unbrowser: unknown command '{bad}'.{hint}\nRun `unbrowser --help` to see what's available.", file=sys.stderr)
+    raise SystemExit(2)
+
+
+def _cmd_search(args: list[str]) -> None:
+    count = 5
+    if "--count" in args:
+        i = args.index("--count")
+        count = int(args[i + 1])
+        del args[i : i + 2]
+    query = " ".join(a for a in args if not a.startswith("-"))
+    if not query:
+        print("usage: unbrowser search \"<query>\" [--count N]", file=sys.stderr)
+        raise SystemExit(2)
+    from .smart import SmartClient
+
+    with SmartClient() as ub:
+        hits = ub.search(query, count=count)
+    print(json.dumps(hits, indent=2))
+
+
+def _cmd_open(args: list[str]) -> None:
+    goal = None
+    if "--goal" in args:
+        i = args.index("--goal")
+        goal = args[i + 1]
+        del args[i : i + 2]
+    url = next((a for a in args if not a.startswith("-")), None)
+    if not url:
+        print("usage: unbrowser open <url> [--goal G]", file=sys.stderr)
+        raise SystemExit(2)
+    from .smart import SmartClient
+
+    with SmartClient() as ub:
+        bundle = ub.navigate_auto(url, goal=goal)
+    print(json.dumps(bundle, indent=2))
 
 
 def _is_help_flag(arg: str) -> bool:
@@ -102,6 +202,17 @@ def main() -> None:
         _usage()
         return
 
+    if argv[0] == "help":
+        raise SystemExit(_help_topic(argv[1] if len(argv) > 1 else None))
+
+    if argv[0] == "search":
+        _cmd_search(argv[1:])
+        return
+
+    if argv[0] == "open":
+        _cmd_open(argv[1:])
+        return
+
     if argv[0] == "navigate":
         _navigate(argv[1:])
         return
@@ -114,9 +225,12 @@ def main() -> None:
         _router(argv[1:])
         return
 
-    binary = find_binary()
-    # Preserve the native binary behavior for every other command.
-    os.execv(binary, ["unbrowser", *argv])
+    # Pass through known binary commands and flags; anything else gets a
+    # did-you-mean instead of a cryptic binary error.
+    if argv[0].startswith("-") or argv[0] in {"session", "exec", "policy-check"}:
+        binary = find_binary()
+        os.execv(binary, ["unbrowser", *argv])
+    _suggest_and_exit(argv[0])
 
 
 if __name__ == "__main__":

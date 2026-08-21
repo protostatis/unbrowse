@@ -46,9 +46,13 @@ solver = ["unchainedsky-cli"]
 # `pip install pyunbrowser` installs the primary `unbrowser` script and a
 # `pyunbrowser` compatibility alias. Both dispatch to the same CLI; the alias
 # makes the Registry-derived `uvx pyunbrowser --mcp` command executable.
+# `unbrowser-smart` is the stdio MCP server for the minimal-3 smart surface
+# (search/open/help) — configured in MCP hosts as `"command": ["unbrowser-smart"]`.
 [project.scripts]
 unbrowser = "unbrowser._cli:main"
 pyunbrowser = "unbrowser._cli:main"
+unbrowser-smart = "unbrowser.smart_mcp:main"
+pyunbrowser-smart = "unbrowser.smart_mcp:main"
 
 # The wheel ships the platform-specific native binary inside unbrowser/_bin/.
 # CI builds the binary first (cargo build --release for each target), copies

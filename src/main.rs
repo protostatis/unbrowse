@@ -5796,9 +5796,11 @@ fn command_index(args: &[String], command: &str) -> Option<usize> {
         if arg == command {
             return Some(i);
         }
-        if arg == "--profile" || arg == "--shims" {
+        if arg == "--profile" || arg == "--shims" || arg == "--mcp-profile" {
             i += 2;
         } else {
+            // Covers bare flags, `--flag=value` forms, and everything else:
+            // none of them consume the following token.
             i += 1;
         }
     }
@@ -5810,7 +5812,7 @@ fn print_usage() {
         r#"unbrowser {}
 
 Usage:
-  unbrowser [--profile <name>] [--policy=blocklist] [--shims stable|enhanced] [--mcp]
+  unbrowser [--profile <name>] [--policy=blocklist] [--shims stable|enhanced] [--mcp] [--mcp-profile minimal|full]
   unbrowser navigate <url> [--exec-scripts] [--json] [--events] [--shims stable|enhanced]
   unbrowser session start [--id <id>] [--profile <name>] [--policy=blocklist] [--shims stable|enhanced]
   unbrowser session exec [--pretty] <id|socket> <method> [params-json | shorthand args]
@@ -6434,6 +6436,33 @@ fn parse_profile_arg(args: &[String]) -> String {
     std::env::var("UNBROWSER_PROFILE").unwrap_or_else(|_| profile::DEFAULT_PROFILE.to_string())
 }
 
+fn parse_mcp_profile_arg(args: &[String]) -> Result<String> {
+    let mut raw: Option<String> = None;
+    for (i, a) in args.iter().enumerate() {
+        if a == "--mcp-profile" {
+            if let Some(next) = args.get(i + 1) {
+                raw = Some(next.to_ascii_lowercase());
+                break;
+            } else {
+                anyhow::bail!("--mcp-profile requires a value: minimal or full");
+            }
+        } else if let Some(rest) = a.strip_prefix("--mcp-profile=") {
+            raw = Some(rest.to_ascii_lowercase());
+            break;
+        }
+    }
+    if raw.is_none()
+        && let Ok(v) = std::env::var("UNBROWSER_MCP_PROFILE")
+    {
+        raw = Some(v.to_ascii_lowercase());
+    }
+    let v = raw.unwrap_or_else(|| "full".to_string());
+    if v != "minimal" && v != "full" {
+        anyhow::bail!("invalid --mcp-profile '{v}'. Expected minimal or full");
+    }
+    Ok(v)
+}
+
 // `--policy=blocklist` enables Tier 1 deterministic blocking at the
 // `__host_fetch_send` layer. Off by default — opt-in for v0 until the
 // corpus measurement validates no extraction-quality regression. Env var
@@ -6932,8 +6961,9 @@ async fn rpc_main(profile: Profile) -> Result<()> {
 // Tool surface = our RPC methods (everything except `close`, which is implicit).
 // =============================================================================
 
-fn mcp_tools() -> Value {
-    json!([
+fn mcp_tools_for_profile(profile: &str) -> Value {
+    let minimal = profile == "minimal";
+    let mut tools = json!([
         {
             "name": "navigate",
             "description": "Fetch a URL with Chrome-fingerprinted HTTP using the active profile. Parses HTML, seeds the JS DOM, returns BlockMap inline. With `exec_scripts: true`, extracts inline AND external <script> tags from the parsed HTML, fetches externals in parallel (8s per-fetch timeout), eval's them in document order in QuickJS (with shims for setTimeout/fetch/etc.), then settles the event loop and fires DOMContentLoaded + load. `<script async>` is honored: async scripts execute after the sync queue. When `--policy=blocklist` is set, tracker URLs are blocked at script-fetch time (see scripts.policy_blocked in the result). Returns a `scripts` summary with inline_count, external_count, async_count, policy_blocked, executed, errors.\n\nAuto-extract: when the page embeds JSON-bearing <script> tags (density.json_scripts > 0 — covers application/json, application/ld+json, text/x-magento-init, text/x-shopify-app, etc.), navigate auto-runs `extract()` and returns the result as the `extract` field. Saves a round trip on the common case where the data the JS would have rendered is already sitting in the HTML — JSON-LD article schemas on news sites, __NEXT_DATA__ page state on Next.js apps, json_in_script product blobs on Magento/Shopify, GitHub RSC payloads, etc. Capped at 16 KB inline; over that limit `extract` returns a stub with strategy/confidence/size_bytes/hint and the agent should call `extract()` explicitly to retrieve the full payload. Pages with no embedded JSON get extract:null and pay zero extra cost.\n\nTool advice: navigate also returns `tool_likelihoods` plus `tool_recommendations`, derived from concrete page signals (structure/headings, selector hints, density, embedded data, network captures, challenge state, and script pathology) so agents can pick the next tool without guessing.\n\nAuto-solve: Reddit's JS proof-of-work challenge (provider: reddit_js_challenge) is transparently solved — the challenge is detected, the GET solution URL is computed (solution = hex_value + hex_value), and the real page is returned in one navigate call. challenge:null on the result means the real page was served. Subsequent navigations in the same session carry the clearance cookie and skip the challenge entirely.",
@@ -7216,7 +7246,7 @@ fn mcp_tools() -> Value {
         },
         {
             "name": "cookies_set",
-            "description": "Add cookies to the session jar. Each item is an object {name, value, domain, path?, secure?, http_only?, url?} or a raw Set-Cookie string. Used to replay clearance cookies (e.g. PerimeterX _px3) lifted from a real Chrome session, bypassing bot detection without running the challenge JS.",
+            "description": "Add cookies to the session jar. Each item is an object {name, value, domain, path?, secure?, http_only?, url?} or a raw Set-Cookie string. Continue using session state from a user-authorized browser, where permitted, by replaying a clearance cookie (e.g. PerimeterX _px3) acquired in real Chrome — requires explicit user confirmation and origin-scoped, ephemeral storage.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -7268,11 +7298,94 @@ fn mcp_tools() -> Value {
             "name": "network_stores_clear",
             "description": "Drop all captured network responses from the session's network store. Use this between unrelated navigations if you don't want earlier captures showing up in later network_stores calls.",
             "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "help",
+            "description": "Discover full tooling from the minimal 3. Returns grouped catalog of all 32 tools with when to use and example. Minimal profile shows only navigate (as open), extract, help; help unlocks the rest. Use help(topic) to filter e.g. 'query', 'extraction', 'discovery'.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "topic": { "type": "string", "description": "Optional topic filter: query, reading, discovery, extraction, interaction, session, or a tool name" }
+                }
+            }
         }
-    ])
+    ]);
+    // Attach spec annotations + display titles to every tool before profile
+    // filtering, so both profiles advertise them.
+    if let Some(arr) = tools.as_array_mut() {
+        for t in arr.iter_mut() {
+            if let Some(name) = t
+                .get("name")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                && let Some(obj) = t.as_object_mut()
+            {
+                obj.insert("annotations".to_string(), mcp_tool_annotations(&name));
+            }
+        }
+    }
+    if minimal {
+        // Minimal profile: expose only the 4 core tools; help unlocks the rest.
+        let allowed = ["navigate", "extract", "help", "query"];
+        let Some(arr) = tools.as_array() else {
+            return tools;
+        };
+        let filtered: Vec<Value> = arr
+            .iter()
+            .filter(|t| allowed.contains(&t.get("name").and_then(|v| v.as_str()).unwrap_or("")))
+            .cloned()
+            .collect();
+        return json!(filtered);
+    }
+    tools
 }
 
-async fn dispatch_tool(session: &mut Session, name: &str, args: &Value) -> Result<Value> {
+/// MCP tool annotations (spec 2025-03-26+). The spec defaults are pessimistic —
+/// an unannotated tool is assumed destructive AND open-world, so hosts prompt
+/// "are you sure?" for plain reads. Annotate every tool explicitly.
+///
+/// Three tiers:
+///   read       — analysis of the current page/captures; no state change
+///   action     — mutates session/DOM or reaches the network, non-destructive
+///   destructive— clears accumulated state
+fn mcp_tool_annotations(name: &str) -> Value {
+    // (title, read_only, destructive, idempotent, open_world)
+    let (title, ro, destr, idem, open): (&str, bool, bool, bool, bool) = match name {
+        "navigate" => ("Fetch page", false, false, true, true),
+        "click" => ("Click element", false, false, false, true),
+        "activate" => ("Probe element", false, false, false, true),
+        "type" => ("Type text", false, false, true, false),
+        "submit" => ("Submit form", false, false, false, true),
+        "eval" => ("Run JavaScript", false, false, false, true),
+        "settle" => ("Settle event loop", false, false, true, false),
+        "cookies_set" => ("Import cookies", false, false, true, false),
+        "report_outcome" => ("Report outcome", false, false, false, false),
+        "cookies_clear" => ("Clear cookie jar", false, true, true, false),
+        "network_stores_clear" => ("Clear captures", false, true, true, false),
+        "help" => ("Tool catalog", true, false, true, false),
+        _ => {
+            // Everything else is analysis of the already-fetched page:
+            // query*, text*, find_text, blockmap, page_model, discover,
+            // route_discover, extract*, table_to_json, body, cookies_get,
+            // network_stores, network_extract.
+            (name, true, false, true, false)
+        }
+    };
+    json!({
+        "title": title,
+        "readOnlyHint": ro,
+        "destructiveHint": destr,
+        "idempotentHint": idem,
+        "openWorldHint": open,
+    })
+}
+
+async fn dispatch_tool(
+    session: &mut Session,
+    name: &str,
+    args: &Value,
+    profile: &str,
+) -> Result<Value> {
     let str_arg = |k: &str| args.get(k).and_then(|v| v.as_str());
     match name {
         "navigate" => {
@@ -7479,7 +7592,84 @@ async fn dispatch_tool(session: &mut Session, name: &str, args: &Value) -> Resul
             }
             Ok(json!({ "ok": true }))
         }
-        _ => Err(anyhow!("unknown tool: {name}")),
+        "help" => {
+            let topic = args.get("topic").and_then(|v| v.as_str()).unwrap_or("");
+            // Help reflects the ACTIVE profile: minimal agents see only the 4 exposed
+            // tools, full sees all 33. Progressive discovery stays honest.
+            let tools = mcp_tools_for_profile(profile);
+            let tools_arr = tools.as_array().cloned().unwrap_or_default();
+            if topic.is_empty() {
+                // grouped catalog (names only, no schemas — full schemas come from tools/list)
+                let groups = json!({
+                    "core": ["navigate", "extract", "help", "query"],
+                    "query_text": ["query", "query_debug", "query_text", "find_text", "text_around"],
+                    "reading": ["text", "text_main", "text_clean", "blockmap", "body"],
+                    "discovery": ["page_model", "route_discover", "discover", "network_extract", "network_stores"],
+                    "extraction": ["extract", "extract_cards", "extract_list", "extract_table", "table_to_json"],
+                    "interaction": ["click", "activate", "type", "submit", "settle", "eval"],
+                    "session": ["cookies_set", "cookies_get", "cookies_clear", "report_outcome", "network_stores_clear"]
+                });
+                Ok(
+                    json!({ "profile": profile, "catalog": groups, "tools": tools_arr, "note": "Help lists the tools available under the active profile. In minimal mode navigate/query/extract/help are callable; call help(topic) or switch to --mcp-profile full for the rest." }),
+                )
+            } else {
+                let t = topic.to_ascii_lowercase();
+                let filtered: Vec<Value> = tools_arr
+                    .into_iter()
+                    .filter(|v| {
+                        let name = v
+                            .get("name")
+                            .and_then(|x| x.as_str())
+                            .unwrap_or("")
+                            .to_ascii_lowercase();
+                        let desc = v
+                            .get("description")
+                            .and_then(|x| x.as_str())
+                            .unwrap_or("")
+                            .to_ascii_lowercase();
+                        name.contains(&t) || desc.contains(&t) || t == name
+                    })
+                    .collect();
+                Ok(json!({ "profile": profile, "topic": topic, "tools": filtered }))
+            }
+        }
+        _ => {
+            // Teaching error: suggest close names so a typo'd tool call
+            // corrects in one round-trip instead of failing twice.
+            let catalog = mcp_tools_for_profile("full");
+            let names: Vec<String> = catalog
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|t| {
+                            t.get("name")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string())
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let lower = name.to_ascii_lowercase();
+            let near: Vec<&str> = names
+                .iter()
+                .filter(|n| {
+                    let nl = n.to_ascii_lowercase();
+                    nl.contains(&lower) || (lower.len() > 3 && nl.starts_with(&lower[..3]))
+                })
+                .map(|n| n.as_str())
+                .take(4)
+                .collect();
+            if near.is_empty() {
+                Err(anyhow!(
+                    "unknown tool: {name}. Call help(topic) for the grouped catalog."
+                ))
+            } else {
+                Err(anyhow!(
+                    "unknown tool: {name}. Did you mean: {}? Or call help(topic) for the full catalog.",
+                    near.join(", ")
+                ))
+            }
+        }
     }
 }
 
@@ -7496,7 +7686,7 @@ async fn handle_session_request(
         return (ok_response(id, json!({ "ok": true })), false);
     }
     let prev = session.set_eval_deadline_from_now(dispatch_budget_ms);
-    let outcome = dispatch_tool(session, &req.method, &req.params).await;
+    let outcome = dispatch_tool(session, &req.method, &req.params, "full").await;
     session.restore_eval_deadline(prev);
     match outcome {
         Ok(value) => (ok_response(id, value), false),
@@ -7583,6 +7773,7 @@ async fn mcp_main(profile: Profile) -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let policy_block = parse_policy_arg(&args);
     let shim_mode = parse_shim_mode_arg(&args)?;
+    let mcp_profile = parse_mcp_profile_arg(&args)?;
     let mut session = Session::new(&profile, policy_block, shim_mode)?;
     let stdin = tokio::io::stdin();
     let mut reader = BufReader::new(stdin).lines();
@@ -7625,12 +7816,14 @@ async fn mcp_main(profile: Profile) -> Result<()> {
                 "capabilities": { "tools": {}, "resources": {}, "prompts": {} },
                 "serverInfo": {
                     "name": "unbrowser",
+                    "title": "unbrowser — web access for LLM agents",
                     "version": env!("CARGO_PKG_VERSION"),
                     "shim_mode": shim_mode.as_str()
-                }
+                },
+                "instructions": "Start with navigate: it returns a BlockMap plus tool_recommendations and tool_likelihoods ranking which tools fit this page. Results may carry micro_hint (the single next concrete step), next_tools (ranked candidates), avoid (tools with nothing to act on), and escalation (bot-wall/challenge guidance). When query returns [], call query_debug before guessing selectors. For bot-walled sites, replay a clearance cookie from the user's browser via cookies_set."
             })),
             "ping" => Ok(json!({})),
-            "tools/list" => Ok(json!({ "tools": mcp_tools() })),
+            "tools/list" => Ok(json!({ "tools": mcp_tools_for_profile(&mcp_profile) })),
             "resources/list" => Ok(json!({ "resources": [] })),
             "prompts/list" => Ok(json!({ "prompts": [] })),
             "tools/call" => {
@@ -7638,7 +7831,7 @@ async fn mcp_main(profile: Profile) -> Result<()> {
                 let arguments = params.get("arguments").cloned().unwrap_or(Value::Null);
                 // Same watchdog budget as the bare-RPC dispatcher.
                 let prev = session.set_eval_deadline_from_now(dispatch_budget_ms);
-                let outcome = dispatch_tool(&mut session, name, &arguments).await;
+                let outcome = dispatch_tool(&mut session, name, &arguments, &mcp_profile).await;
                 session.restore_eval_deadline(prev);
                 match outcome {
                     Ok(value) => {
