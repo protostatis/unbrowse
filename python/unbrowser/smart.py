@@ -393,6 +393,10 @@ def _escalation_for_bundle(bundle: dict) -> dict | None:
             }
         # Low-confidence challenge + real HTTP error: classify by status; keep
         # the detector's read as shadowed evidence so it isn't lost.
+        # Invariant: challenge_shadowed is bound exactly when control reaches
+        # the HTTP-error section below with a truthy challenge. Any new
+        # early-return added inside this `if challenge:` block must keep that
+        # pairing, or the `{**shadow, ...}` spreads will NameError.
         challenge_shadowed = {"provider": provider, "confidence": conf}
     # 2. http errors — split per advisor
     if isinstance(status, int) and status >= 400:
@@ -667,22 +671,19 @@ class SmartClient(Client):
     def _timed_call(self, method: str, kw: dict, tm: float):
         """One bounded enrichment RPC on the shared pool.
 
-        Python threads cannot be killed mid-run; timeout returns a marker and
-        the worker thread eventually finishes and returns to the pool.
+        Returns (result, future). On timeout the result is the _timeout
+        marker and `future` may still be running: Client.call matches
+        responses by position over a single pipe, so the abandoned worker
+        owns the pipe until it reads that response. Callers must drain the
+        future (or stop submitting) before any further request.
         """
         import concurrent.futures as _cf
 
         fut = self._smart_executor.submit(self.call, method, **kw)
         try:
-            return fut.result(timeout=tm)
+            return fut.result(timeout=tm), fut
         except _cf.TimeoutError:
-            try:
-                fut.cancel()
-            except Exception:
-                pass
-            return {"_timeout": True, "error": f"{method} timed out after {tm}s"}
-        except Exception:
-            raise
+            return {"_timeout": True, "error": f"{method} timed out after {tm}s"}, fut
 
     def navigate_auto(
         self,
@@ -751,13 +752,31 @@ class SmartClient(Client):
             specs.append(("page_model", "page_model", {"goal": goal} if goal else {}))
 
         deadline = time.monotonic() + timeout
-        for name, method, call_kw in specs:
-            remaining = max(0.5, deadline - time.monotonic())
+        for i, (name, method, call_kw) in enumerate(specs):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                # Hard budget: no grace floor, or the phase overruns by
+                # ~0.5s per remaining spec.
+                bundle[name] = None
+                bundle[name + "_error"] = f"skipped: shared {timeout}s enrichment budget exhausted"
+                continue
+            pipe_busy = False
             try:
-                res = self._timed_call(method, call_kw, remaining)
+                res, fut = self._timed_call(method, call_kw, remaining)
                 if isinstance(res, dict) and res.get("_timeout"):
                     bundle[name] = None
                     bundle[name + "_timeout"] = True
+                    # The abandoned worker still owns the pipe (its request
+                    # was written; responses are position-matched). Give it a
+                    # short grace to land its response — if it does, the
+                    # result is still good. Otherwise reserve the pipe:
+                    # submitting now could cross-read another call's reply.
+                    try:
+                        res = fut.result(timeout=1.5)
+                        del bundle[name + "_timeout"]
+                        bundle[name] = res
+                    except Exception:
+                        pipe_busy = True
                 else:
                     bundle[name] = res
             except UnbrowserError as e:
@@ -767,6 +786,13 @@ class SmartClient(Client):
                     bundle[name + "_error"] = str(e)
             except Exception as e:
                 bundle[name + "_error"] = str(e)
+            if pipe_busy:
+                for rest_name, _, _ in specs[i + 1:]:
+                    bundle[rest_name] = None
+                    bundle[rest_name + "_error"] = (
+                        f"skipped: {method} still in flight after timeout; rpc pipe reserved"
+                    )
+                break
         # escalation on failures (Option A: expose related escalation)
         esc = _escalation_for_bundle(bundle)
         bundle["escalation"] = esc
