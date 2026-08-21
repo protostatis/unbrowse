@@ -168,3 +168,70 @@ def test_escalation_fixtures():
     b = {"status": 200, "blockmap": {}, "discover_timeout": True, "raw": {}}
     esc = _escalation_for_bundle(b)
     assert esc and esc["reason"] == "timeout" and esc["retryable"] is True
+
+
+def test_thin_shell_no_json_suggests_query_debug_not_extract():
+    # crates.io / old.reddit / Akamai-shell case: thin_shell + zero embedded
+    # JSON. Suggesting extract collides with avoid[] ("no JSON-bearing
+    # <script> tags") — the agent must not get contradictory routing.
+    sys.path.insert(0, str(REPO / "python"))
+    from unbrowser.smart import _escalation_for_bundle, _avoid_for_bundle
+
+    b = {"status": 200, "url": "https://crates.io/search?q=http", "blockmap": {"density": {"thin_shell": True, "json_scripts": 0}}, "raw": {}}
+    esc = _escalation_for_bundle(b)
+    assert esc and esc["reason"] == "thin_shell"
+    assert all(t["tool"] != "extract" for t in esc["next_tools"]), esc["next_tools"]
+    avoid = {a["tool"] for a in _avoid_for_bundle(b)}
+    assert "extract" in avoid
+    assert not ({t["tool"] for t in esc["next_tools"]} & avoid)
+
+    # with embedded JSON present, extract remains a valid suggestion
+    b2 = dict(b, blockmap={"density": {"thin_shell": True, "json_scripts": 3}})
+    esc2 = _escalation_for_bundle(b2)
+    assert esc2 and any(t["tool"] == "extract" for t in esc2["next_tools"])
+
+
+def test_low_confidence_challenge_does_not_shadow_http_status():
+    # httpbin 503 once classified challenge@0.55 instead of server_error.
+    sys.path.insert(0, str(REPO / "python"))
+    from unbrowser.smart import _escalation_for_bundle
+
+    b = {"status": 503, "challenge": {"provider": "unknown_block", "confidence": 0.55}, "blockmap": {}, "raw": {}}
+    esc = _escalation_for_bundle(b)
+    assert esc and esc["reason"] == "server_error", esc
+    assert esc["evidence"]["challenge_shadowed"]["provider"] == "unknown_block"
+    assert esc["retryable"] is True
+
+    # same low-confidence match on a 200 page keeps the challenge verdict
+    # (nothing better to classify it as)
+    b = {"status": 200, "challenge": {"provider": "unknown_block", "confidence": 0.55}, "blockmap": {}, "raw": {}}
+    esc = _escalation_for_bundle(b)
+    assert esc and esc["reason"] == "challenge"
+
+    # confident challenge still preempts an HTTP error status (npm Turnstile)
+    b = {"status": 403, "challenge": {"provider": "cloudflare_turnstile", "confidence": 0.97}, "blockmap": {}, "raw": {}}
+    esc = _escalation_for_bundle(b)
+    assert esc and esc["reason"] == "challenge"
+
+
+def test_apply_coherence_filters_contradictions():
+    sys.path.insert(0, str(REPO / "python"))
+    from unbrowser.smart import _apply_coherence
+
+    b = {
+        "escalation": {"next_tools": [{"tool": "extract", "confidence": 0.7}]},
+        "next_tools": [{"tool": "extract", "confidence": 0.7}, {"tool": "query_debug", "confidence": 0.6}],
+        "avoid": [{"tool": "extract", "reason": "no JSON-bearing <script> tags"}],
+        "micro_hint": {"tool": "extract", "selector": "json_ld"},
+    }
+    _apply_coherence(b)
+    tools = [t["tool"] for t in b["next_tools"]]
+    assert tools == ["query_debug"], tools
+    assert b["escalation"]["next_tools"] == b["next_tools"], "escalation copy must stay in sync"
+    assert "micro_hint" not in b
+
+    # no avoid -> no-op; clean bundle stays untouched
+    c = {"next_tools": [{"tool": "text_main", "confidence": 0.5}], "micro_hint": {"tool": "text_main"}}
+    before = json.loads(json.dumps(c))
+    _apply_coherence(c)
+    assert c == before
