@@ -2,10 +2,17 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 import tomllib
 import unittest
 
 from scripts import release_check
+
+# Source of truth for the expected version; hardcoded literals here are why
+# this suite silently failed across 0.0.20/0.0.21.
+VERSION = re.search(
+    r'^version\s*=\s*"([^"]+)"', release_check.read("Cargo.toml"), re.M
+).group(1)
 
 
 class RegistryManifestTests(unittest.TestCase):
@@ -14,7 +21,7 @@ class RegistryManifestTests(unittest.TestCase):
         self.python_project = tomllib.loads(release_check.read("python/pyproject.toml"))["project"]
 
     def test_checked_in_manifest_matches_release_contract(self) -> None:
-        release_check.validate_registry_manifest(self.manifest, "0.0.19")
+        release_check.validate_registry_manifest(self.manifest, VERSION)
 
     def test_python_distribution_exposes_registry_and_primary_commands(self) -> None:
         release_check.validate_python_entry_points(self.python_project)
@@ -29,33 +36,33 @@ class RegistryManifestTests(unittest.TestCase):
         manifest = copy.deepcopy(self.manifest)
         manifest["remotes"] = [{"type": "streamable-http", "url": "https://example.com/mcp"}]
         with self.assertRaisesRegex(SystemExit, "must not contain remotes"):
-            release_check.validate_registry_manifest(manifest, "0.0.19")
+            release_check.validate_registry_manifest(manifest, VERSION)
 
     def test_package_version_drift_is_rejected(self) -> None:
         manifest = copy.deepcopy(self.manifest)
         manifest["packages"][0]["version"] = "0.0.16"
         with self.assertRaisesRegex(SystemExit, "packages must match"):
-            release_check.validate_registry_manifest(manifest, "0.0.19")
+            release_check.validate_registry_manifest(manifest, VERSION)
 
     def test_mcp_argument_drift_is_rejected(self) -> None:
         manifest = copy.deepcopy(self.manifest)
         manifest["packages"][1]["packageArguments"][0]["value"] = "--version"
         with self.assertRaisesRegex(SystemExit, "packages must match"):
-            release_check.validate_registry_manifest(manifest, "0.0.19")
+            release_check.validate_registry_manifest(manifest, VERSION)
 
     def test_clawhub_skill_card_matches_release_contract(self) -> None:
         card_version = release_check.version_from_skill_card(
             release_check.read("skills/unbrowser/skill-card.md")
         )
-        self.assertEqual(card_version, "0.0.19")
-        release_check.validate_skill_versions("0.0.19", "0.0.19", card_version)
+        self.assertEqual(card_version, VERSION)
+        release_check.validate_skill_versions(VERSION, VERSION, card_version)
 
     def test_clawhub_skill_card_version_drift_is_rejected(self) -> None:
         with self.assertRaisesRegex(
             SystemExit,
-            "skill card version '0.0.18' != binary version '0.0.19'",
+            f"skill card version '0.0.18' != binary version '{VERSION}'",
         ):
-            release_check.validate_skill_versions("0.0.19", "0.0.19", "0.0.18")
+            release_check.validate_skill_versions(VERSION, VERSION, "0.0.18")
 
 
 if __name__ == "__main__":
