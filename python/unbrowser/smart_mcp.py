@@ -17,6 +17,7 @@ import json
 import sys
 from typing import Any, Optional
 
+from . import __version__ as PKG_VERSION
 from .smart import SmartClient, HELP_CATALOG
 
 TOOLS = [
@@ -110,7 +111,7 @@ def main() -> None:
                 result = {
                     "protocolVersion": "2025-06-18",
                     "capabilities": {"tools": {}},
-                    "serverInfo": {"name": "unbrowser-smart-py", "version": "0.0.19-minimal"},
+                    "serverInfo": {"name": "unbrowser-smart", "version": PKG_VERSION},
                 }
             elif method == "ping":
                 result = {}

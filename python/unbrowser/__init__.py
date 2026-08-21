@@ -15,6 +15,12 @@ import name is still `unbrowser` — same convention as `python-dateutil`.)
 For the `extract` / auto-strategy command, watchdog-bounded `exec_scripts`,
 the cookie handoff for bot-walled sites, and the BlockMap shape: see the
 project README at https://github.com/protostatis/unbrowser.
+
+Smart wrapper (minimal 3-tool progressive discovery): `SmartClient` adds
+`search(query)` (Brave → DDG fallback), `navigate_auto(url, goal=)`
+(open + bounded discover/cards + `escalation`/`micro_hint`/`next_tools`),
+and `help(topic)` (grouped catalog). Runs as an MCP server via the
+`unbrowser-smart` console script or `python -m unbrowser.smart_mcp`.
 """
 
 from __future__ import annotations
@@ -445,3 +451,20 @@ def navigate(url: str, exec_scripts: bool = False, shim_mode: str | None = None)
     """
     with Client(shim_mode=shim_mode) as ub:
         return ub.navigate(url, exec_scripts=exec_scripts)
+
+
+# Lazy re-export of SmartClient (guard against circular import: smart.py imports
+# Client/UnbrowserError from this module, so the import has to come last).
+try:  # pragma: no cover - import guard
+    from .smart import SmartClient as SmartClient
+
+    __all__ = [
+        "Client",
+        "UnbrowserError",
+        "SmartClient",
+        "find_binary",
+        "navigate",
+        "__version__",
+    ]
+except ImportError:  # pragma: no cover - smart.py missing (source checkout/old wheel)
+    pass
