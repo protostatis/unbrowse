@@ -446,18 +446,36 @@ def _micro_hint_for_bundle(bundle: dict) -> dict | None:
     When auto-discovery (cards/discover) comes up empty but the page has usable
     DOM facts (tables, forms, li, json scripts), give the agent an immediate,
     specific micro-step instead of forcing it to re-scan. Zero extra network calls.
+
+    Calibration rule: a hint that fires when it shouldn't trains agents to
+    ignore hints. Each branch gates on positive evidence, not mere presence —
+    e.g. a table only counts as data when it has enough <td> cells to be a
+    data grid, not a docs-page layout table.
     """
     bm = bundle.get("blockmap") or {}
     density = bm.get("density") or {}
     discover = bundle.get("discover") or {}
     headings = bm.get("headings") or []
-    # 1. tables
+    # 1. tables — gated on cell count: data grids have many <td>s; layout
+    #    tables (spec sheets, docs sidebars) have ~4 and extract_table on
+    #    them wastes a call.
     tables = density.get("tables") or {}
-    if isinstance(tables, dict) and tables.get("total", 0) > 0:
+    td = density.get("td") or {}
+    td_total = td.get("total", 0) if isinstance(td, dict) else 0
+    if isinstance(tables, dict) and tables.get("total", 0) > 0 and td_total >= 8:
         return {
             "tool": "extract_table",
             "selector": "table",
-            "reason": f"{tables.get('total')} table element(s) in the DOM; run extract_table (or query 'table tbody tr') for the premarket/finance rows.",
+            "reason": f"{tables.get('total')} table(s) with {td_total} cells — run extract_table('table') (or query 'table tbody tr' to preview rows).",
+        }
+    # 1b. table shells with no static cells = JS-injected grid (CNBC trap):
+    #     extract_table would return empty rows; the data needs scripts or
+    #     the network captures.
+    if isinstance(tables, dict) and tables.get("total", 0) > 0 and density.get("likely_js_filled"):
+        return {
+            "tool": "navigate",
+            "selector": None,
+            "reason": f"{tables.get('total')} table shell(s) but cells are JS-injected — re-navigate with exec_scripts=true, or check network_stores for the underlying data API.",
         }
     # 2. search forms (discover found them)
     forms = discover.get("forms") or []
@@ -468,7 +486,14 @@ def _micro_hint_for_bundle(bundle: dict) -> dict | None:
             "selector": f.get("controls", [{}])[0].get("ref") or "form input",
             "reason": f"Search form found ('{f.get('label','')}') — type a query then submit to navigate it.",
         }
-    # 3. headings but no cards: text is present, just narrow
+    # 3. embedded JSON beats prose scanning when present
+    if density.get("json_scripts", 0) > 0:
+        return {
+            "tool": "extract",
+            "selector": "json_ld",
+            "reason": f"{density.get('json_scripts')} JSON-bearing script tag(s); call extract() for structured data without selector guessing.",
+        }
+    # 4. headings but no cards: text is present, just narrow
     if len(headings) > 0 and not (bundle.get("cards") or []):
         h = headings[0].get("text", "") if isinstance(headings[0], dict) else ""
         return {
@@ -476,7 +501,7 @@ def _micro_hint_for_bundle(bundle: dict) -> dict | None:
             "selector": "body",
             "reason": f"No repeated cards, but headings exist (e.g. '{h[:40]}') — use text_main or query_text on the content root.",
         }
-    # 4. lots of <li> but cards failed
+    # 5. lots of <li> but cards failed
     li = density.get("li") or {}
     if isinstance(li, dict) and li.get("total", 0) > 20 and not (bundle.get("cards") or []):
         return {
@@ -484,14 +509,55 @@ def _micro_hint_for_bundle(bundle: dict) -> dict | None:
             "selector": "li",
             "reason": f"{li.get('total')} list items present but extract_cards found none — try extract_list with an explicit item_selector.",
         }
-    # 5. embedded JSON is the fastest path
-    if density.get("json_scripts", 0) > 0:
-        return {
-            "tool": "extract",
-            "selector": "json_ld",
-            "reason": f"{density.get('json_scripts')} JSON-bearing script tag(s); call extract() or eval a parser for structured data.",
-        }
     return None
+
+
+def _avoid_for_bundle(bundle: dict) -> list[dict]:
+    """Tools with ~zero posterior given hard absence signals.
+
+    Negative advice saves more tokens than positive advice: each avoided
+    call is a full round-trip + failed-parse cost. Only emit when the
+    evidence is structural (element class absent from the DOM), never
+    speculative.
+    """
+    bm = bundle.get("blockmap") or {}
+    density = bm.get("density") or {}
+    interactives = bm.get("interactives") or {}
+    avoid: list[dict] = []
+    if not density.get("json_scripts", 0):
+        avoid.append({"tool": "extract", "reason": "no JSON-bearing <script> tags in static HTML"})
+    tables = density.get("tables")
+    if not isinstance(tables, dict) or not tables.get("total", 0):
+        avoid.append({"tool": "extract_table", "reason": "no <table> elements in static HTML"})
+    if not interactives.get("forms"):
+        avoid.append({"tool": "submit", "reason": "no <form> elements on page"})
+    if bundle.get("challenge"):
+        avoid.append({"tool": "query", "reason": "page is bot-walled; DOM tools read challenge markup, not content"})
+    return avoid
+
+
+def _tool_entropy(bundle: dict) -> dict | None:
+    """Normalized entropy of the next_tools distribution.
+
+    Flat distribution = ambiguous page = the honest advice is 'gather more
+    information', not argmax. h ∈ [0,1]; >0.85 means no tool stands out.
+    """
+    nxt = bundle.get("next_tools") or []
+    confs = [n.get("confidence", 0.0) for n in nxt if isinstance(n, dict)]
+    confs = [c for c in confs if c > 0]
+    if len(confs) < 2:
+        return None
+    total = sum(confs)
+    import math
+
+    h = -sum((c / total) * math.log(c / total) for c in confs)
+    h_max = math.log(len(confs))
+    h_norm = round(h / h_max, 3) if h_max else 1.0
+    return {
+        "h": h_norm,
+        "ambiguous": h_norm > 0.85,
+        **({"note": "distribution flat — prefer query_debug/text_main over committing to a tool"} if h_norm > 0.85 else {}),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -664,10 +730,20 @@ class SmartClient(Client):
         esc = _escalation_for_bundle(bundle)
         bundle["escalation"] = esc
         bundle["next_tools"] = esc.get("next_tools", []) if esc else _next_tools_from_bundle(bundle)
+        # Probabilistic routing aids: what to skip (hard absence evidence),
+        # and how flat the next-tool distribution is (ambiguity signal).
+        avoid = _avoid_for_bundle(bundle)
+        if avoid:
+            bundle["avoid"] = avoid
+        ent = _tool_entropy(bundle)
+        if ent is not None:
+            bundle["tool_entropy"] = ent
         # micro_hint: concrete selector/next-step when auto-discovery came up short,
         # so the agent doesn't have to re-scan the DOM. Always attached to a failure
-        # path (or when cards are empty on an information-rich page).
-        micro = _micro_hint_for_bundle(bundle)
+        # path (or when cards are empty on an information-rich page). Suppressed
+        # when the distribution is ambiguous — argmax over noise is how hints
+        # lose agent trust.
+        micro = None if (ent and ent.get("ambiguous")) else _micro_hint_for_bundle(bundle)
         if micro is not None:
             bundle["micro_hint"] = micro
         return bundle
