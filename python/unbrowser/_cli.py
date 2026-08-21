@@ -121,12 +121,32 @@ def _suggest_and_exit(bad: str) -> None:
     raise SystemExit(2)
 
 
+def _pop_value(args: list[str], flag: str) -> str | None:
+    """Pop `flag <value>` from args; exit 2 cleanly when the value is missing."""
+    if flag not in args:
+        return None
+    i = args.index(flag)
+    if i + 1 >= len(args):
+        print(
+            f"unbrowser: {flag} requires a value.\n"
+            "Run `unbrowser --help` to see what's available.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+    val = args[i + 1]
+    del args[i : i + 2]
+    return val
+
+
 def _cmd_search(args: list[str]) -> None:
     count = 5
-    if "--count" in args:
-        i = args.index("--count")
-        count = int(args[i + 1])
-        del args[i : i + 2]
+    raw_count = _pop_value(args, "--count")
+    if raw_count is not None:
+        try:
+            count = int(raw_count)
+        except ValueError:
+            print("unbrowser: --count must be an integer.", file=sys.stderr)
+            raise SystemExit(2)
     query = " ".join(a for a in args if not a.startswith("-"))
     if not query:
         print("usage: unbrowser search \"<query>\" [--count N]", file=sys.stderr)
@@ -139,11 +159,7 @@ def _cmd_search(args: list[str]) -> None:
 
 
 def _cmd_open(args: list[str]) -> None:
-    goal = None
-    if "--goal" in args:
-        i = args.index("--goal")
-        goal = args[i + 1]
-        del args[i : i + 2]
+    goal = _pop_value(args, "--goal")
     url = next((a for a in args if not a.startswith("-")), None)
     if not url:
         print("usage: unbrowser open <url> [--goal G]", file=sys.stderr)
