@@ -26,6 +26,7 @@ Done:
 - ClawHub: skill v0.0.18 remains live; the versioned source-card repair needed for a safe v0.0.19 publish is under owner review at `https://github.com/protostatis/unbrowser/pull/45`.
 - Official MCP Registry: `io.github.protostatis/unbrowser` v0.0.18 remains active. The v0.0.19 manifest is prepared in source but has not been published.
 - v0.0.20 is prepared in source (version bump + new release section below); publish pending tag `v0.0.20`.
+- Homebrew: tap updated to 0.0.20 via `protostatis/homebrew-tap#2` (merged); verified by installing from the formula and running `brew test`.
 
 Pending or blocked:
 
@@ -159,7 +160,7 @@ Prepared 2026-08-21. Publish pending tag `v0.0.20`. Distribution streams:
 - **GitHub Release**: binary tarballs for 4 platforms + SHA256 checksums at `https://github.com/protostatis/unbrowser/releases/tag/v0.0.20` (created by the release workflow on tag)
 - **PyPI**: `pip install pyunbrowser==0.0.20` — platform wheels bundling the native binary
 - **crates.io**: `cargo install unbrowser` — v0.0.20
-- **Homebrew**: tap update to follow publish (v0.0.18 live)
+- **Homebrew**: `brew install protostatis/tap/unbrowser` — v0.0.20 (tap PR `protostatis/homebrew-tap#2` merged; all four SHA256s independently verified against the published `.sha256` assets, then install + `brew test` run locally before merge)
 - **ClawHub**: skill source card bumped to 0.0.20 in source; publish follows tag
 - **Official MCP Registry**: `server.json` manifest bumped to 0.0.20 in source; publish follows tag
 - **GHCR**: `ghcr.io/protostatis/unbrowser:v0.0.20` (+ `0.0.20`, then serialized `:latest` promotion) — multi-arch linux/amd64 + linux/arm64 distroless image, built by the release workflow's `publish-ghcr` job from the prebuilt Linux binaries, with MCP-init / navigate / nonroot smoke gates before push
