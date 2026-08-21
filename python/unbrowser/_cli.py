@@ -57,7 +57,7 @@ START HERE
 MULTI-STEP SESSIONS (cookies + last page persist)
   unbrowser session start [--id <id>] [--profile <name>] [--policy=blocklist]
   unbrowser exec [--pretty] <id|socket> <method> [params-json | shorthand args]
-  unbrowser session stop <id|socket> | list | prune
+  unbrowser session stop <id|socket> | session list | session prune
 
 TOOLS — call via `unbrowser exec <id> <method> '{{...}}'`, or over MCP
 {fams}
