@@ -1,7 +1,7 @@
 ---
 name: unbrowser
 description: Cheap first-pass web discovery without launching Chrome — fetch SSR pages, run bounded JS, find routes/forms/API endpoints, extract structured data, and detect bot-wall or browser-only escalation points.
-version: 0.0.20
+version: 0.0.21
 tags:
   - browser
   - web-search
@@ -238,6 +238,7 @@ These are the methods the agent will use on every task:
 `navigate` also returns `tool_likelihoods` and `tool_recommendations`. Use them as a ranking, not a mandate:
 
 - Start with the highest-ranked suggestion that still matches the task.
+- Results may carry `micro_hint` (one concrete next step), `next_tools` (ranked candidates), `avoid` (tools with nothing to act on), and `escalation` (stable reason + options). Follow `micro_hint`; never call a tool listed in `avoid`; treat `escalation.reason: challenge` or `unsupported_js_feature` as the browser-only signal.
 - Prefer `discover` when the task is exploratory: find pricing/docs/search/status/API routes, identify forms, inspect captured API surfaces, or decide whether Chrome is needed before doing extraction.
 - Prefer `route_discover` when you are already on the page and only need page-owned routes/forms/query previews.
 - Prefer `page_model` when the page is noisy but has recognizable cards, forms, tables, or answer blocks.

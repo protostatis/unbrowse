@@ -25,8 +25,8 @@ Done:
 - Homebrew: v0.0.18 remains live; the four-architecture v0.0.19 formula update is under owner review at `https://github.com/protostatis/homebrew-tap/pull/1`.
 - ClawHub: skill v0.0.18 remains live; the versioned source-card repair needed for a safe v0.0.19 publish is under owner review at `https://github.com/protostatis/unbrowser/pull/45`.
 - Official MCP Registry: `io.github.protostatis/unbrowser` v0.0.18 remains active. The v0.0.19 manifest is prepared in source but has not been published.
-- v0.0.20 is prepared in source (version bump + new release section below); publish pending tag `v0.0.20`.
-- Homebrew: tap updated to 0.0.20 via `protostatis/homebrew-tap#2` (merged); verified by installing from the formula and running `brew test`.
+- v0.0.21 is prepared in source (version bump + new release section below); publish pending tag `v0.0.21`.
+- v0.0.20 released 2026-08-21; Homebrew tap updated to 0.0.20 via `protostatis/homebrew-tap#2` (merged); verified by installing from the formula and running `brew test`.
 
 Pending or blocked:
 
@@ -152,6 +152,21 @@ Hosted smoke checklist for each Glama release:
 Latest package-version-verified hosted smoke result: Glama release `v0.1.2` built on `pyunbrowser==0.0.16` (`019f3405`), status: published. On 2026-08-11, the anonymous directory surface reported repository release `0.1.4`, 32 tools, and A scores for license, quality, and maintenance, but did not expose the hosted `pyunbrowser` pin. Do not infer a hosted package upgrade from the repository release number. Previous: `v0.1.1` initialized `unbrowser` `0.0.14`, exposed 32 tools, navigated Hacker News, returned 30 `.titleline > a` links, typed into HN search, and submitted to Algolia successfully.
 
 Latest score result: Server Quality A, Server Coherence A, Tool Definition Quality A, Maintenance A, related servers present, and 32 of 32 tools scored.
+
+## v0.0.21 Release
+
+Prepared 2026-08-21. Publish pending tag `v0.0.21`. Distribution streams:
+
+- **GitHub Release**: binary tarballs for 4 platforms + SHA256 checksums at `https://github.com/protostatis/unbrowser/releases/tag/v0.0.21` (created by the release workflow on tag)
+- **PyPI**: `pip install pyunbrowser==0.0.21` — platform wheels bundling the native binary
+- **crates.io**: `cargo install unbrowser` — v0.0.21
+- **Homebrew**: `brew install protostatis/tap/unbrowser` — v0.0.21 (tap formula update follows the GitHub Release for SHA256 verification)
+- **ClawHub**: skill source card bumped to 0.0.21 in source; publish follows tag
+- **Official MCP Registry**: `server.json` manifest bumped to 0.0.21 in source; publish follows tag
+- **GHCR**: `ghcr.io/protostatis/unbrowser:v0.0.21` (+ `0.0.21`, then serialized `:latest` promotion) — built by the release workflow's `publish-ghcr` job; Dockerfile pin bumped to `pyunbrowser==0.0.21`
+- **Glama / Smithery / mcp.so**: hosted endpoint unaffected by version bump
+
+Highlights over 0.0.20: route_discover no longer burns the 30s eval watchdog on medium DOMs (`nearestHeading` subtree scans were quadratic under QuickJS — lobste.rs 30.0s → 0.04s; timeout escalations across a live 24-site matrix went 7/24 → 0); smart-layer routing coherence (thin_shell no longer suggests `extract` against `avoid[]`; sub-0.7-confidence challenge verdicts no longer shadow concrete HTTP statuses); shared enrichment deadline with cards-first ordering; `open()` bundles ~2× smaller (`raw` slimmed); CLI `search --count`/`open --goal` parse errors exit cleanly; `find_binary()` prefers the freshest local build over a stale bundled binary.
 
 ## v0.0.20 Release
 

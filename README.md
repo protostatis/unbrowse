@@ -79,6 +79,8 @@ On macOS, `/usr/bin/python3` is 3.9 and cannot install the wheel; use `pipx` or 
 }
 ```
 
+Minimal surface: add `"--mcp-profile", "minimal"` to expose only `navigate`/`query`/`extract`/`help` and let the agent discover the rest via `help(topic)`. The Python wrapper ships a 3-tool smart server (`search`/`open`/`help`) as the `unbrowser-smart` console script.
+
 <details>
 <summary>Docker MCP configuration</summary>
 
@@ -106,6 +108,7 @@ See [installation and interface reference](docs/usage.md#installation) for Cargo
 - **Stable element refs** (`e:142`): query an element once, then `click`, `type`, or `submit` it without re-parsing HTML.
 - **Stateful cookies and forms**: cookie jar, GET and URL-encoded POST form submission, links, and redirects persist within a session.
 - **Page and challenge signals**: `density.likely_js_filled`, `thin_shell`, and `challenge.provider` tell an agent whether to run scripts, inspect embedded data, stop, or escalate to an authorized browser session.
+- **Routing aids on every result**: `micro_hint` (the single next concrete step), `next_tools` (ranked candidates), `avoid` (tools with nothing to act on), and a stable `escalation` taxonomy (`challenge`, `thin_shell`, `partial_result`, …) with retryable/severity/evidence — recommendations never contradict `avoid`.
 - **Structured helpers**: route discovery, card extraction, table normalization, `text_main`, and selector debugging cover common extraction workflows.
 
 ## Script mode and escalation
