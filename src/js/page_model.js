@@ -177,10 +177,19 @@
   }
 
   function nearestHeading(el) {
+    // Walk ancestors checking ONLY their direct children for a heading.
+    // The previous version ran querySelector over each ancestor's whole
+    // subtree (siblings included): O(links x depth x document size), which
+    // blew the 30s eval watchdog on medium DOMs under QuickJS.
     var n = el;
     while (n && n.tagName) {
-      var h = n.querySelector && n.querySelector('h1,h2,h3,h4,[itemprop="name"]');
-      if (h) return textOf(h, 180);
+      var kids = n.children || [];
+      for (var i = 0; i < kids.length; i++) {
+        var k = kids[i];
+        var t = k.tagName || '';
+        if (/^H[1-4]$/.test(t)) return textOf(k, 180);
+        if (k.getAttribute && k.getAttribute('itemprop') === 'name') return textOf(k, 180);
+      }
       n = n.parentNode;
     }
     return '';

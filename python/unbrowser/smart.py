@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from typing import Any
 from urllib.parse import quote_plus, urlparse
 from urllib.request import Request, urlopen
@@ -364,35 +365,47 @@ def _escalation_for_bundle(bundle: dict) -> dict | None:
     extract = bundle.get("extract") or {}
     scripts = bundle.get("scripts") or {}
 
-    # 1. challenge / bot wall — portable fact from Rust
+    # 1. challenge / bot wall — portable fact from Rust.
+    # Calibration: a low-confidence challenge match must not shadow a concrete
+    # HTTP status (httpbin 503 once reported as challenge@0.55 instead of
+    # server_error). Challenge preempts HTTP classification only when the page
+    # returned <400, or the detector itself is confident.
     if challenge:
         provider = challenge.get("provider") or challenge.get("vendor") or "unknown"
-        return {
-            "reason": "challenge",
-            "category": "external_capability",
-            "confidence": float(challenge.get("confidence", 0.9)) if isinstance(challenge.get("confidence"), (int, float)) else 0.9,
-            "severity": "high",
-            "retryable": False,
-            "evidence": {"provider": provider, "status": status, "clearance_cookie": challenge.get("clearance_cookie")},
-            "hint": "Continue using session state from a user-authorized browser, where permitted. Acquire a clearance cookie in real Chrome for this origin and replay via cookies_set.",
-            "options": [
-                {"action": "replay_clearance_cookie", "tool": "cookies_set", "params": {"cookies": [{"name": challenge.get("clearance_cookie") or "_px3", "value": "<from user-authorized Chrome>", "domain": urlparse(bundle.get("url") or "").hostname or "example.com"}]}, "requires_user_confirmation": True},
-                {"action": "external_action", "external_action": "chrome_escalation", "reason": provider, "params": {"reason": provider}},
-                {"action": "try_help", "tool": "help", "params": {"topic": "session"}},
-            ],
-            "next_tools": [{"tool": "cookies_set", "when": "replay user-authorized cookie", "confidence": 0.9}],
-        }
+        raw_conf = challenge.get("confidence")
+        conf = float(raw_conf) if isinstance(raw_conf, (int, float)) else 0.9
+        http_error = isinstance(status, int) and status >= 400
+        if conf >= 0.7 or not http_error:
+            return {
+                "reason": "challenge",
+                "category": "external_capability",
+                "confidence": conf,
+                "severity": "high",
+                "retryable": False,
+                "evidence": {"provider": provider, "status": status, "clearance_cookie": challenge.get("clearance_cookie")},
+                "hint": "Continue using session state from a user-authorized browser, where permitted. Acquire a clearance cookie in real Chrome for this origin and replay via cookies_set.",
+                "options": [
+                    {"action": "replay_clearance_cookie", "tool": "cookies_set", "params": {"cookies": [{"name": challenge.get("clearance_cookie") or "_px3", "value": "<from user-authorized Chrome>", "domain": urlparse(bundle.get("url") or "").hostname or "example.com"}]}, "requires_user_confirmation": True},
+                    {"action": "external_action", "external_action": "chrome_escalation", "reason": provider, "params": {"reason": provider}},
+                    {"action": "try_help", "tool": "help", "params": {"topic": "session"}},
+                ],
+                "next_tools": [{"tool": "cookies_set", "when": "replay user-authorized cookie", "confidence": 0.9}],
+            }
+        # Low-confidence challenge + real HTTP error: classify by status; keep
+        # the detector's read as shadowed evidence so it isn't lost.
+        challenge_shadowed = {"provider": provider, "confidence": conf}
     # 2. http errors — split per advisor
     if isinstance(status, int) and status >= 400:
+        shadow = {"challenge_shadowed": challenge_shadowed} if challenge else {}
         if status in (401, 403):
-            return {"reason": "auth_required", "category": "external_capability", "confidence": 0.95, "severity": "high", "retryable": False, "evidence": {"status": status}, "hint": f"HTTP {status} auth required or blocked. Acquire session state from a user-authorized browser if permitted.", "options": [{"action": "external_action", "external_action": "chrome_escalation", "reason": "auth"}, {"action": "try_help", "tool": "help", "params": {"topic": "session"}}], "next_tools": [{"tool": "help", "when": "session", "confidence": 0.7}]}
+            return {"reason": "auth_required", "category": "external_capability", "confidence": 0.95, "severity": "high", "retryable": False, "evidence": {**shadow, "status": status}, "hint": f"HTTP {status} auth required or blocked. Acquire session state from a user-authorized browser if permitted.", "options": [{"action": "external_action", "external_action": "chrome_escalation", "reason": "auth"}, {"action": "try_help", "tool": "help", "params": {"topic": "session"}}], "next_tools": [{"tool": "help", "when": "session", "confidence": 0.7}]}
         if status == 404:
-            return {"reason": "not_found", "category": "terminal", "confidence": 0.95, "severity": "low", "retryable": False, "evidence": {"status": status}, "hint": f"HTTP {status} not found — terminal, do not retry.", "options": [{"action": "try_help", "tool": "help", "params": {"topic": "discovery"}}], "next_tools": []}
+            return {"reason": "not_found", "category": "terminal", "confidence": 0.95, "severity": "low", "retryable": False, "evidence": {**shadow, "status": status}, "hint": f"HTTP {status} not found — terminal, do not retry.", "options": [{"action": "try_help", "tool": "help", "params": {"topic": "discovery"}}], "next_tools": []}
         if status == 429:
-            return {"reason": "rate_limited", "category": "retry", "confidence": 0.9, "severity": "medium", "retryable": True, "evidence": {"status": status}, "hint": f"HTTP {status} rate-limited. Back off and retry, or switch search provider (Brave→DDG fallback already handles this for search).", "options": [{"action": "retry_backoff", "tool": "open", "params": {"url": bundle.get("url")}}, {"action": "try_help", "tool": "help", "params": {"topic": "session"}}], "next_tools": [{"tool": "open", "when": "retry with backoff", "confidence": 0.6}]}
+            return {"reason": "rate_limited", "category": "retry", "confidence": 0.9, "severity": "medium", "retryable": True, "evidence": {**shadow, "status": status}, "hint": f"HTTP {status} rate-limited. Back off and retry, or switch search provider (Brave→DDG fallback already handles this for search).", "options": [{"action": "retry_backoff", "tool": "open", "params": {"url": bundle.get("url")}}, {"action": "try_help", "tool": "help", "params": {"topic": "session"}}], "next_tools": [{"tool": "open", "when": "retry with backoff", "confidence": 0.6}]}
         if status >= 500:
-            return {"reason": "server_error", "category": "retry", "confidence": 0.8, "severity": "medium", "retryable": True, "evidence": {"status": status}, "hint": f"HTTP {status} server error — retryable.", "options": [{"action": "retry", "tool": "open", "params": {"url": bundle.get("url")}}], "next_tools": [{"tool": "open", "when": "retry", "confidence": 0.6}]}
-        return {"reason": "http_error", "category": "retry", "confidence": 0.8, "severity": "medium", "retryable": True, "evidence": {"status": status}, "hint": f"HTTP {status} — check challenge field and retry.", "options": [{"action": "try_help", "tool": "help", "params": {"topic": "session"}}], "next_tools": [{"tool": "help", "when": "session", "confidence": 0.7}]}
+            return {"reason": "server_error", "category": "retry", "confidence": 0.8, "severity": "medium", "retryable": True, "evidence": {**shadow, "status": status}, "hint": f"HTTP {status} server error — retryable.", "options": [{"action": "retry", "tool": "open", "params": {"url": bundle.get("url")}}], "next_tools": [{"tool": "open", "when": "retry", "confidence": 0.6}]}
+        return {"reason": "http_error", "category": "retry", "confidence": 0.8, "severity": "medium", "retryable": True, "evidence": {**shadow, "status": status}, "hint": f"HTTP {status} — check challenge field and retry.", "options": [{"action": "try_help", "tool": "help", "params": {"topic": "session"}}], "next_tools": [{"tool": "help", "when": "session", "confidence": 0.7}]}
     # 3. timeout — enrichment bounded
     if bundle.get("discover_timeout") or bundle.get("cards_timeout") or bundle.get("page_model_timeout"):
         return {
@@ -410,9 +423,16 @@ def _escalation_for_bundle(bundle: dict) -> dict | None:
             ],
             "next_tools": [{"tool": "extract_cards", "when": "cards only", "confidence": 0.7}],
         }
-    # 4. unsupported JS feature / thin shell — stable codes
+    # 4. unsupported JS feature / thin shell — stable codes.
+    # Suggest extract only on positive evidence (JSON-bearing scripts exist);
+    # otherwise the suggestion collides with avoid[] ("no JSON-bearing
+    # <script> tags") and the agent gets contradictory routing advice
+    # (crates.io / old.reddit / Akamai-shell pages).
     if density.get("thin_shell"):
-        return {"reason": "thin_shell", "category": "continuation", "confidence": 0.7, "severity": "medium", "retryable": True, "evidence": {"thin_shell": True}, "hint": "SSR shell with little content — try exec_scripts or check embedded JSON.", "options": [{"action": "retry_exec_scripts", "tool": "open", "params": {"url": bundle.get("url"), "exec_scripts": True}}, {"action": "try_extract", "tool": "extract", "params": {}}], "next_tools": [{"tool": "extract", "when": "auto-strategy", "confidence": 0.7}]}
+        has_json = bool(density.get("json_scripts"))
+        if has_json:
+            return {"reason": "thin_shell", "category": "continuation", "confidence": 0.7, "severity": "medium", "retryable": True, "evidence": {"thin_shell": True, "json_scripts": density.get("json_scripts", 0)}, "hint": "SSR shell with little content, but embedded JSON exists — try exec_scripts or extract.", "options": [{"action": "retry_exec_scripts", "tool": "open", "params": {"url": bundle.get("url"), "exec_scripts": True}}, {"action": "try_extract", "tool": "extract", "params": {}}], "next_tools": [{"tool": "extract", "when": "auto-strategy", "confidence": 0.7}]}
+        return {"reason": "thin_shell", "category": "continuation", "confidence": 0.7, "severity": "medium", "retryable": True, "evidence": {"thin_shell": True}, "hint": "SSR shell with no embedded JSON — re-navigate with exec_scripts, or diagnose with query_debug before committing to a tool.", "options": [{"action": "retry_exec_scripts", "tool": "open", "params": {"url": bundle.get("url"), "exec_scripts": True}}, {"action": "diagnose", "tool": "query_debug", "params": {"selector": "body"}}], "next_tools": [{"tool": "query_debug", "when": "diagnose empty shell", "confidence": 0.6}]}
     if density.get("likely_js_filled"):
         return {"reason": "unsupported_js_feature", "category": "external_capability", "confidence": 0.85, "severity": "high", "retryable": False, "evidence": {"likely_js_filled": True, "script_errors": (scripts.get("errors") or [])[:2]}, "hint": "Client-rendered content requires JS features not supported by QuickJS (e.g. ES modules, import maps, WASM). Use extract for embedded JSON or escalate to real Chrome, where permitted.", "options": [{"action": "extract_alternate", "tool": "extract", "params": {"strategy": "json_in_script"}}, {"action": "external_action", "external_action": "chrome_escalation", "reason": "unsupported_js_feature"}], "next_tools": [{"tool": "extract", "when": "try json_in_script / nuxt_data", "confidence": 0.8}]}
     # check ES-module specifically (REI case) even when likely_js_filled is false
@@ -481,9 +501,10 @@ def _micro_hint_for_bundle(bundle: dict) -> dict | None:
     forms = discover.get("forms") or []
     if forms:
         f = forms[0]
+        first = (f.get("controls") or [{}])[0]
         return {
             "tool": "type",
-            "selector": f.get("controls", [{}])[0].get("ref") or "form input",
+            "selector": first.get("ref") or "form input",
             "reason": f"Search form found ('{f.get('label','')}') — type a query then submit to navigate it.",
         }
     # 3. embedded JSON beats prose scanning when present
@@ -534,6 +555,29 @@ def _avoid_for_bundle(bundle: dict) -> list[dict]:
     if bundle.get("challenge"):
         avoid.append({"tool": "query", "reason": "page is bot-walled; DOM tools read challenge markup, not content"})
     return avoid
+
+
+def _apply_coherence(bundle: dict) -> None:
+    """Drop routing advice that contradicts avoid[], in place.
+
+    Defense in depth: escalation branches and micro_hint are written
+    independently from _avoid_for_bundle, so a branch can recommend a tool
+    that hard-absence evidence forbids (crates.io thin_shell suggested
+    `extract` while avoid[] suppressed it). Whatever the cause, an agent
+    must never see both pieces of advice in one bundle.
+    """
+    avoid_tools = {a.get("tool") for a in bundle.get("avoid") or []}
+    if not avoid_tools:
+        return
+    nxt = [t for t in bundle.get("next_tools") or [] if isinstance(t, dict) and t.get("tool") not in avoid_tools]
+    if nxt != bundle.get("next_tools"):
+        bundle["next_tools"] = nxt
+        esc = bundle.get("escalation")
+        if isinstance(esc, dict):
+            esc["next_tools"] = nxt
+    micro = bundle.get("micro_hint")
+    if isinstance(micro, dict) and micro.get("tool") in avoid_tools:
+        del bundle["micro_hint"]
 
 
 def _tool_entropy(bundle: dict) -> dict | None:
@@ -620,6 +664,26 @@ class SmartClient(Client):
         """
         return _help_catalog(topic)
 
+    def _timed_call(self, method: str, kw: dict, tm: float):
+        """One bounded enrichment RPC on the shared pool.
+
+        Python threads cannot be killed mid-run; timeout returns a marker and
+        the worker thread eventually finishes and returns to the pool.
+        """
+        import concurrent.futures as _cf
+
+        fut = self._smart_executor.submit(self.call, method, **kw)
+        try:
+            return fut.result(timeout=tm)
+        except _cf.TimeoutError:
+            try:
+                fut.cancel()
+            except Exception:
+                pass
+            return {"_timeout": True, "error": f"{method} timed out after {tm}s"}
+        except Exception:
+            raise
+
     def navigate_auto(
         self,
         url: str,
@@ -645,23 +709,6 @@ class SmartClient(Client):
         On failure, escalation.options tells the agent what to try next
         (retry, try alternate extractor, escalate_to_chrome, help).
         """
-        import concurrent.futures as _cf
-
-        def _timed_call(method: str, kw: dict, tm: float = timeout):
-            # Runs on the shared pool (bounded max_workers=3, reaped in close()).
-            # Python threads cannot be killed mid-run; timeout returns a marker and
-            # the worker thread eventually finishes and returns to the pool.
-            fut = self._smart_executor.submit(self.call, method, **kw)
-            try:
-                return fut.result(timeout=tm)
-            except _cf.TimeoutError:
-                try:
-                    fut.cancel()
-                except Exception:
-                    pass
-                return {"_timeout": True, "error": f"{method} timed out after {tm}s"}
-            except Exception:
-                raise
 
         # handle relative hrefs like "/" from query("a") results; _last_url may be
         # None before the first navigate, so pass an empty base (falls through to https://)
@@ -675,7 +722,13 @@ class SmartClient(Client):
             "challenge": nav.get("challenge"),
             "scripts": nav.get("scripts"),
             "extract": nav.get("extract"),
-            "raw": nav,
+            # Slim view of the raw navigate result: only fields not already
+            # surfaced above that drivers/routers consume. The full result
+            # duplicated blockmap/extract/headers verbatim (~2x tokens/call).
+            "raw": {k: nav[k] for k in (
+                "tool_recommendations", "tool_likelihoods", "tool_confidence",
+                "tool_margin", "navigation_id", "browser_route",
+            ) if k in nav},
         }
         if goal is None:
             try:
@@ -683,42 +736,30 @@ class SmartClient(Client):
             except Exception:
                 goal = None
 
-        # enrichment is best-effort and time-bounded
-        enrichments = []
-        enrichments.append(("discover", {"goal": goal, "limit": discover_limit} if goal else {"limit": discover_limit}))
-        enrichments.append(("cards", {"limit": cards_limit}))
+        # Enrichment is best-effort and bounded by ONE shared deadline.
+        # Client.call is synchronous request/response over a single pipe
+        # (no id matching), so concurrent calls would cross-read responses;
+        # calls stay sequential, but the whole phase shares one budget —
+        # worst case was navigate + k*timeout (BBC took ~26s), now + timeout.
+        # Cards first: extract_cards is cheap and content-bearing; if a
+        # later call misbehaves it starves discover's share, not the cards.
+        specs: list[tuple[str, str, dict]] = [
+            ("cards", "extract_cards", {"limit": cards_limit}),
+            ("discover", "discover", {"goal": goal, "limit": discover_limit} if goal else {"limit": discover_limit}),
+        ]
         if include_page_model:
-            enrichments.append(("page_model", {"goal": goal} if goal else {}))
+            specs.append(("page_model", "page_model", {"goal": goal} if goal else {}))
 
-        for name, call_kw in enrichments:
+        deadline = time.monotonic() + timeout
+        for name, method, call_kw in specs:
+            remaining = max(0.5, deadline - time.monotonic())
             try:
-                if name == "discover":
-                    res = _timed_call("discover", call_kw)
-                    if isinstance(res, dict) and res.get("_timeout"):
-                        bundle["discover"] = None
-                        bundle["discover_timeout"] = True
-                    else:
-                        bundle["discover"] = res
-                elif name == "cards":
-                    try:
-                        res = _timed_call("extract_cards", call_kw)
-                        if isinstance(res, dict) and res.get("_timeout"):
-                            bundle["cards"] = None
-                            bundle["cards_timeout"] = True
-                        else:
-                            bundle["cards"] = res
-                    except UnbrowserError as e:
-                        if "unknown method" in str(e):
-                            bundle["cards"] = None
-                        else:
-                            raise
-                elif name == "page_model":
-                    res = _timed_call("page_model", call_kw)
-                    if isinstance(res, dict) and res.get("_timeout"):
-                        bundle["page_model"] = None
-                        bundle["page_model_timeout"] = True
-                    else:
-                        bundle["page_model"] = res
+                res = self._timed_call(method, call_kw, remaining)
+                if isinstance(res, dict) and res.get("_timeout"):
+                    bundle[name] = None
+                    bundle[name + "_timeout"] = True
+                else:
+                    bundle[name] = res
             except UnbrowserError as e:
                 if "unknown method" in str(e):
                     bundle[name] = None
@@ -735,6 +776,10 @@ class SmartClient(Client):
         avoid = _avoid_for_bundle(bundle)
         if avoid:
             bundle["avoid"] = avoid
+        # No recommendation may contradict avoid[] (entropy then reflects the
+        # surviving distribution). Called here and again after micro_hint;
+        # idempotent.
+        _apply_coherence(bundle)
         ent = _tool_entropy(bundle)
         if ent is not None:
             bundle["tool_entropy"] = ent
@@ -746,6 +791,7 @@ class SmartClient(Client):
         micro = None if (ent and ent.get("ambiguous")) else _micro_hint_for_bundle(bundle)
         if micro is not None:
             bundle["micro_hint"] = micro
+        _apply_coherence(bundle)
         return bundle
 
     # ---- infer ------------------------------------------------------------
