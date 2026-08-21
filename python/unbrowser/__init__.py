@@ -60,13 +60,13 @@ def find_binary() -> str:
 
       1. ``UNBROWSER_BIN`` env var (overrides everything; right escape hatch
          for testing a one-off build or vendored copy).
-      2. Bundled binary inside this package (the wheel ships one for your
-         platform — this is what end users hit).
+      2. Newest by mtime among: the bundled binary inside this package and
+         local dev builds (``target/release`` / ``target/debug`` relative to
+         a source checkout). End users with a wheel install only have the
+         bundled binary; developers with a fresh ``cargo build`` get that
+         instead of a months-old bundled one.
       3. ``unbrowser`` on ``$PATH`` (covers ``cargo install`` / ``brew install``
          users who didn't install the wheel).
-      4. The local debug build at ``target/debug/unbrowser`` relative to the
-         repo root (developer convenience — only fires when running from a
-         checkout without an installed wheel).
 
     Raises UnbrowserError with a helpful message if none of the above resolve.
     """
@@ -74,17 +74,22 @@ def find_binary() -> str:
     if env:
         return _checked_binary(Path(env), "UNBROWSER_BIN")
 
-    bundled = Path(__file__).parent / "_bin" / _binary_name()
-    if bundled.is_file():
-        return _checked_binary(bundled, "bundled binary")
-
     # Dev fallback before PATH: source checkouts commonly have the Python
     # package importable without an installed wheel, while PATH may contain the
     # pip-generated `unbrowser` console wrapper. Prefer the real local binary.
     # (python/unbrowser/__init__.py -> python/unbrowser -> python -> repo root).
-    dev = Path(__file__).resolve().parents[2] / "target" / "debug" / "unbrowser"
-    if dev.is_file():
-        return _checked_binary(dev, "target/debug/unbrowser")
+    candidates: list[tuple[float, str, Path]] = []
+    bundled = Path(__file__).parent / "_bin" / _binary_name()
+    if bundled.is_file():
+        candidates.append((bundled.stat().st_mtime, "bundled binary", bundled))
+    dev_root = Path(__file__).resolve().parents[2] / "target"
+    for profile in ("release", "debug"):
+        dev = dev_root / profile / "unbrowser"
+        if dev.is_file():
+            candidates.append((dev.stat().st_mtime, f"target/{profile}/unbrowser", dev))
+    if candidates:
+        _, source, path = max(candidates, key=lambda c: c[0])
+        return _checked_binary(path, source)
 
     on_path = shutil.which("unbrowser")
     if on_path:
@@ -94,7 +99,7 @@ def find_binary() -> str:
 
     raise UnbrowserError(
         "Could not locate the unbrowser binary. Tried: $UNBROWSER_BIN, "
-        "package-bundled binary, target/debug/unbrowser, $PATH. "
+        "package-bundled binary, target/release|debug/unbrowser, $PATH. "
         "Install via `pip install pyunbrowser` (PyPI distribution; ships the binary), "
         "`cargo install unbrowser`, or `brew install unbrowser`."
     )
